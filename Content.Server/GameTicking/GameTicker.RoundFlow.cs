@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Content.Server.Announcements;
 using Content.Server.CrewManifest;
 using Content.Server.Discord;
+using Content.Server._Calamity.Persistence;
 using Content.Server.GameTicking.Events;
 using Content.Server.Ghost;
 using Content.Server.Maps;
@@ -46,6 +47,7 @@ namespace Content.Server.GameTicking
         [Dependency] private CrewManifestSystem _crewManifest = default!;
         [Dependency] private StationSystem _stationSystem = default!;
         [Dependency] private BankSystem _bank = default!;
+        [Dependency] private CalamityWorldPersistenceSystem _worldPersistence = default!;
 
         private static readonly Counter RoundNumberMetric = Metrics.CreateCounter(
             "ss14_round_number",
@@ -155,11 +157,23 @@ namespace Content.Server.GameTicking
 
             for (var i = 0; i < maps.Count; i++)
             {
-                LoadGameMap(maps[i], out var mapId);
+                MapId mapId;
+                if (i == 0 && _worldPersistence.TryLoadSavedWorldMap(maps[i], out mapId, out _))
+                {
+                    // The persistence system raised PostGameMapLoad for the restored map.
+                }
+                else
+                {
+                    LoadGameMap(maps[i], out mapId);
+                }
+
                 DebugTools.Assert(!_map.IsInitialized(mapId));
 
                 if (i == 0)
+                {
                     DefaultMap = mapId;
+                    _worldPersistence.SetWorldMap(mapId);
+                }
             }
         }
 
