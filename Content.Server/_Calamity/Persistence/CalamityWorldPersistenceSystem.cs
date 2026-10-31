@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Content.Server.Chat.Managers;
 using Content.Server.GameTicking;
 using Content.Shared._Calamity.CCVar;
+using Content.Shared.Chat;
 using Content.Shared.GameTicking;
 using Content.Shared.Maps;
 using Robust.Server;
@@ -29,6 +31,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     [Dependency] private IBaseServer _baseServer = default!;
     [Dependency] private IConfigurationManager _configuration = default!;
+    [Dependency] private IChatManager _chatManager = default!;
     [Dependency] private SharedMapSystem _mapSystem = default!;
     [Dependency] private IResourceManager _resources = default!;
     [Dependency] private IGameTiming _timing = default!;
@@ -37,6 +40,9 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     private MapId? _worldMap;
     private TimeSpan _nextSaveAt;
+    private TimeSpan? _queuedSaveAt;
+    private string? _queuedSaveReason;
+    private bool _saveInProgress;
     private bool _shutdownSaveAttempted;
 
     public override void Initialize()
@@ -49,14 +55,22 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     {
         base.Update(frameTime);
 
-        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
-            _worldMap == null ||
-            _timing.RealTime < _nextSaveAt)
+        if (_queuedSaveReason != null && _queuedSaveAt <= _timing.RealTime)
         {
+            var reason = _queuedSaveReason;
+            _queuedSaveReason = null;
+            _queuedSaveAt = null;
+            PerformSnapshot(reason);
             return;
         }
 
-        SaveSnapshot("autosave");
+        if (_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) &&
+            _worldMap != null &&
+            !_saveInProgress &&
+            _timing.RealTime >= _nextSaveAt)
+        {
+            QueueSnapshot("autosave");
+        }
     }
 
     /// <summary>
@@ -66,6 +80,18 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     {
         _worldMap = mapId;
         _nextSaveAt = _timing.RealTime + GetSaveInterval();
+    }
+
+    /// <summary>
+    /// Queues a manual world snapshot and announces it before the synchronous save begins.
+    /// </summary>
+    public bool RequestManualSave()
+    {
+        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) || _worldMap == null || _saveInProgress || _queuedSaveReason != null)
+            return false;
+
+        QueueSnapshot("manual");
+        return true;
     }
 
     /// <summary>
@@ -128,36 +154,67 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             return;
 
         _shutdownSaveAttempted = true;
-        SaveSnapshot("shutdown");
+        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) || _worldMap == null)
+            return;
+
+        if (_queuedSaveReason == null)
+            Announce("calamity-world-save-starting");
+
+        _queuedSaveReason = null;
+        _queuedSaveAt = null;
+        PerformSnapshot("shutdown");
     }
 
-    private void SaveSnapshot(string reason)
+    private void QueueSnapshot(string reason)
+    {
+        if (_saveInProgress || _queuedSaveReason != null)
+            return;
+
+        _queuedSaveReason = reason;
+        _queuedSaveAt = _timing.RealTime + TimeSpan.FromSeconds(1);
+        Announce("calamity-world-save-starting");
+        Log.Info($"Queued {reason} world snapshot.");
+    }
+
+    private void PerformSnapshot(string reason)
     {
         if (_worldMap == null || !_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled))
+        {
+            Announce("calamity-world-save-failed");
             return;
+        }
+
+        if (_saveInProgress)
+            return;
+
+        _saveInProgress = true;
 
         if (!_mapSystem.TryGetMap(_worldMap, out var mapEntity) || mapEntity == null)
         {
             Log.Error($"Cannot save world snapshot: map {_worldMap} is not loaded.");
+            _saveInProgress = false;
+            Announce("calamity-world-save-failed");
             ScheduleNextSave();
             return;
         }
 
-        var directory = GetSnapshotDirectory(create: true)!;
-        var epoch = GetCommittedSnapshots(directory)
-            .Select(GetEpoch)
-            .DefaultIfEmpty(0)
-            .Max() + 1;
-        var snapshotName = $"world-{epoch:D8}.yml";
-        var markerName = $"world-{epoch:D8}.complete";
-        var temporaryMarkerName = $"world-{epoch:D8}.complete.tmp";
-        var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
-
         try
         {
+            var directory = GetSnapshotDirectory(create: true)!;
+            var epoch = GetCommittedSnapshots(directory)
+                .Select(GetEpoch)
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+            var snapshotName = $"world-{epoch:D8}.yml";
+            var markerName = $"world-{epoch:D8}.complete";
+            var temporaryMarkerName = $"world-{epoch:D8}.complete.tmp";
+            var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
+
             if (!_mapLoader.TrySaveMap(mapEntity.Value, snapshotPath) || !directory.Exists(snapshotPath))
             {
                 Log.Error($"Failed to write world snapshot {snapshotPath}.");
+                Announce("calamity-world-save-failed");
+                _saveInProgress = false;
                 ScheduleNextSave();
                 return;
             }
@@ -165,6 +222,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             if (!_mapLoader.TryReadFile(snapshotPath, out _))
             {
                 Log.Error($"World snapshot {snapshotPath} could not be parsed; leaving the previous snapshot active.");
+                Announce("calamity-world-save-failed");
+                _saveInProgress = false;
                 ScheduleNextSave();
                 return;
             }
@@ -173,15 +232,25 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             directory.Rename(new ResPath(temporaryMarkerName), new ResPath(markerName));
             PruneSnapshots(directory);
             Log.Info($"Completed {reason} world snapshot {snapshotName}.");
+            Announce("calamity-world-save-complete");
         }
         catch (Exception exception)
         {
             Log.Error($"Failed to complete {reason} world snapshot: {exception}");
+            Announce("calamity-world-save-failed");
+            _saveInProgress = false;
             ScheduleNextSave();
             return;
         }
 
+        _saveInProgress = false;
         ScheduleNextSave();
+    }
+
+    private void Announce(string messageId)
+    {
+        var message = Loc.GetString(messageId);
+        _chatManager.ChatMessageToAll(ChatChannel.Server, message, message, EntityUid.Invalid, hideChat: false, recordReplay: true);
     }
 
     private void ScheduleNextSave()
