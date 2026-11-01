@@ -1,5 +1,4 @@
 using Content.Server.Discord;
-using Content.Shared._Calamity.CCVar;
 using Content.Shared.CCVar;
 using Content.Shared.GameTicking;
 
@@ -37,20 +36,8 @@ namespace Content.Server.GameTicking
 
         private void InitializeCVars()
         {
-            Subs.CVar(_cfg, CalamityCCVars.PersistentRoundEnabled, value =>
-            {
-                if (value && LobbyEnabled)
-                    _cfg.SetCVar(CCVars.GameLobbyEnabled, false);
-            }, true);
-
             Subs.CVar(_cfg, CCVars.GameLobbyEnabled, value =>
             {
-                if (value && _cfg.GetCVar(CalamityCCVars.PersistentRoundEnabled))
-                {
-                    _cfg.SetCVar(CCVars.GameLobbyEnabled, false);
-                    return;
-                }
-
                 LobbyEnabled = value;
                 foreach (var (userId, status) in _playerGameStatuses)
                 {

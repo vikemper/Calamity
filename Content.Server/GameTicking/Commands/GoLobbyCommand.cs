@@ -19,7 +19,9 @@ namespace Content.Server.GameTicking.Commands
         public string Help => $"Usage: {Command} / {Command} <preset>";
         public void Execute(IConsoleShell shell, string argStr, string[] args)
         {
-            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            var ticker = _e.System<GameTicker>();
+            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled) &&
+                ticker.RunLevel == GameRunLevel.InRound)
             {
                 shell.WriteLine(Loc.GetString("calamity-persistent-round-protected"));
                 return;
@@ -27,8 +29,6 @@ namespace Content.Server.GameTicking.Commands
 
             GamePresetPrototype? preset = null;
             var presetName = string.Join(" ", args);
-
-            var ticker = _e.System<GameTicker>();
 
             if (args.Length > 0)
             {

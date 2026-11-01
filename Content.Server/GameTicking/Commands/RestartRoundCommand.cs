@@ -19,13 +19,13 @@ namespace Content.Server.GameTicking.Commands
 
         public void Execute(IConsoleShell shell, string argStr, string[] args)
         {
-            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            var ticker = _e.System<GameTicker>();
+            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled) &&
+                ticker.RunLevel == GameRunLevel.InRound)
             {
                 shell.WriteLine(Loc.GetString("calamity-persistent-round-protected"));
                 return;
             }
-
-            var ticker = _e.System<GameTicker>();
 
             if (ticker.RunLevel != GameRunLevel.InRound)
             {
@@ -49,13 +49,15 @@ namespace Content.Server.GameTicking.Commands
 
         public void Execute(IConsoleShell shell, string argStr, string[] args)
         {
-            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            var ticker = _e.System<GameTicker>();
+            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled) &&
+                ticker.RunLevel == GameRunLevel.InRound)
             {
                 shell.WriteLine(Loc.GetString("calamity-persistent-round-protected"));
                 return;
             }
 
-            _e.System<GameTicker>().RestartRound();
+            ticker.RestartRound();
         }
     }
 }
