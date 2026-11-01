@@ -164,32 +164,37 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
         foreach (var marker in GetCommittedSnapshots(directory))
         {
+            var snapshotName = string.Empty;
+            var snapshotPath = default(ResPath);
+            var isFullWorldSnapshot = false;
+            var restoredPrototype = prototype;
+            MapId restoredMapId;
+            IReadOnlyList<EntityUid> restoredGrids;
+            LoadResult? loadedState = null;
+
             try
             {
-                var snapshotName = ReadText(directory, marker).Trim();
+                snapshotName = ReadText(directory, marker).Trim();
                 if (!IsSnapshotFileName(snapshotName))
                 {
                     Log.Error($"Ignoring invalid persistence marker {marker}.");
                     continue;
                 }
 
-                var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
-                var restoredPrototype = prototype;
-                MapId restoredMapId;
-                IReadOnlyList<EntityUid> restoredGrids;
-
-                if (snapshotName.EndsWith("-universe.yml", StringComparison.Ordinal))
+                snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
+                isFullWorldSnapshot = snapshotName.EndsWith("-universe.yml", StringComparison.Ordinal);
+                var loadOptions = MapLoadOptions.Default;
+                loadOptions.ExpectedCategory = isFullWorldSnapshot ? FileCategory.Save : FileCategory.Map;
+                if (!_mapLoader.TryLoadGeneric(snapshotPath, out loadedState, loadOptions) || loadedState == null)
                 {
-                    var loadOptions = MapLoadOptions.Default;
-                    loadOptions.ExpectedCategory = FileCategory.Save;
-                    if (!_mapLoader.TryLoadGeneric(snapshotPath, out LoadResult? loadedState, loadOptions) || loadedState == null)
-                    {
-                        Log.Error($"Could not load world snapshot {snapshotPath}; trying the previous committed snapshot.");
-                        continue;
-                    }
+                    Log.Error($"Could not load world snapshot {snapshotPath}; trying the previous committed snapshot.");
+                    continue;
+                }
 
-                    Entity<MapComponent>? mainMap = null;
-                    foreach (var candidate in loadedState.Maps)
+                Entity<MapComponent>? mainMap = null;
+                foreach (var candidate in loadedState.Maps)
+                {
+                    if (isFullWorldSnapshot)
                     {
                         if (!TryComp(candidate.Owner, out CalamityPersistentMapComponent? persistentMap) ||
                             persistentMap.Key != MainMapKey)
@@ -197,65 +202,78 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                             continue;
                         }
 
-                        mainMap = candidate;
                         if (!string.IsNullOrWhiteSpace(persistentMap.GameMapPrototype) &&
                             _prototypeManager.TryIndex<GameMapPrototype>(persistentMap.GameMapPrototype, out var savedPrototype))
                         {
                             restoredPrototype = savedPrototype;
                         }
-
-                        break;
                     }
-
-                    if (mainMap == null)
+                    else if (loadedState.Maps.Count != 1)
                     {
-                        _mapLoader.Delete(loadedState);
-                        Log.Error($"World snapshot {snapshotPath} did not contain a map registered as '{MainMapKey}'; trying the previous committed snapshot.");
                         continue;
                     }
 
-                    restoredMapId = mainMap.Value.Comp.MapId;
-                    restoredGrids = loadedState.Grids
+                    mainMap = candidate;
+                    break;
+                }
+
+                if (mainMap == null)
+                {
+                    _mapLoader.Delete(loadedState);
+                    loadedState = null;
+                    Log.Error(isFullWorldSnapshot
+                        ? $"World snapshot {snapshotPath} did not contain a map registered as '{MainMapKey}'; trying the previous committed snapshot."
+                        : $"Legacy map snapshot {snapshotPath} did not contain exactly one map; trying the previous committed snapshot.");
+                    continue;
+                }
+
+                if (!isFullWorldSnapshot &&
+                    TryComp(mainMap.Value.Owner, out CalamityPersistentMapComponent? legacyPersistentMap) &&
+                    !string.IsNullOrWhiteSpace(legacyPersistentMap.GameMapPrototype) &&
+                    _prototypeManager.TryIndex<GameMapPrototype>(legacyPersistentMap.GameMapPrototype, out var legacyPrototype))
+                {
+                    restoredPrototype = legacyPrototype;
+                }
+
+                restoredMapId = mainMap.Value.Comp.MapId;
+                restoredGrids = isFullWorldSnapshot
+                    ? loadedState.Grids
                         .Where(grid => Transform(grid.Owner).MapID == restoredMapId)
                         .Select(grid => grid.Owner)
-                        .ToArray();
-                }
-                else
-                {
-                    // Read older committed snapshots that only contain the main map.
-                    if (!_mapLoader.TryLoadMap(snapshotPath, out var map, out var loadedGrids) || map == null)
-                    {
-                        Log.Error($"Could not load world snapshot {snapshotPath}; trying the previous committed snapshot.");
-                        continue;
-                    }
+                        .ToArray()
+                    : loadedState.Grids.Select(grid => grid.Owner).ToArray();
+            }
+            catch (Exception exception)
+            {
+                if (loadedState != null)
+                    _mapLoader.Delete(loadedState);
 
-                    restoredMapId = map.Value.Comp.MapId;
-                    restoredGrids = loadedGrids.Select(grid => grid.Owner).ToArray();
-                    if (TryComp(map.Value.Owner, out CalamityPersistentMapComponent? persistentMap) &&
-                        !string.IsNullOrWhiteSpace(persistentMap.GameMapPrototype) &&
-                        _prototypeManager.TryIndex<GameMapPrototype>(persistentMap.GameMapPrototype, out var savedPrototype))
-                    {
-                        restoredPrototype = savedPrototype;
-                    }
-                }
+                Log.Error($"Failed to load snapshot marker {marker}: {exception}; trying the previous committed snapshot.");
+                continue;
+            }
 
-                mapId = restoredMapId;
-                grids = restoredGrids;
+            mapId = restoredMapId;
+            grids = restoredGrids;
+            RestoredSavedWorldMapThisBoot = true;
+            RestoredFullWorldSnapshotThisBoot = isFullWorldSnapshot;
+
+            try
+            {
+                SetWorldMap(mapId, restoredPrototype);
                 if (_mapSystem.TryGetMap(mapId, out var restoredMapEntity) && restoredMapEntity != null)
                     _metadata.SetEntityName(restoredMapEntity.Value, restoredPrototype.MapName);
 
                 RestoreLoadedPlayerMindData();
                 RaiseLocalEvent(new PostGameMapLoad(restoredPrototype, mapId, grids, null, restored: true));
-                RestoredSavedWorldMapThisBoot = true;
-                RestoredFullWorldSnapshotThisBoot = snapshotName.EndsWith("-universe.yml", StringComparison.Ordinal);
-                SetWorldMap(mapId, restoredPrototype);
                 Log.Info($"Restored world map from snapshot {snapshotPath}.");
-                return true;
             }
             catch (Exception exception)
             {
-                Log.Error($"Failed to restore snapshot marker {marker}: {exception}");
+                // The snapshot entities are already loaded. Do not fall back and load another copy of the world.
+                Log.Error($"World snapshot {snapshotPath} loaded, but post-load initialization failed: {exception}");
             }
+
+            return true;
         }
 
         return false;
