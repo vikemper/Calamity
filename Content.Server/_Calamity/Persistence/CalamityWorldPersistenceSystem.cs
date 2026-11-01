@@ -57,6 +57,11 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     /// </summary>
     public bool RestoredSavedWorldMapThisBoot { get; private set; }
 
+    /// <summary>
+    /// True when the restored snapshot included the server's game rules and auxiliary entities.
+    /// </summary>
+    public bool RestoredFullWorldSnapshotThisBoot { get; private set; }
+
     public override void Initialize()
     {
         base.Initialize();
@@ -145,6 +150,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         mapId = default;
         grids = Array.Empty<EntityUid>();
         RestoredSavedWorldMapThisBoot = false;
+        RestoredFullWorldSnapshotThisBoot = false;
 
         if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled))
             return false;
@@ -226,6 +232,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 RestoreLoadedPlayerMindData();
                 RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null, restored: true));
                 RestoredSavedWorldMapThisBoot = true;
+                RestoredFullWorldSnapshotThisBoot = snapshotName.EndsWith("-universe.yml", StringComparison.Ordinal);
                 SetWorldMap(mapId);
                 Log.Info($"Restored world map from snapshot {snapshotPath}.");
                 return true;

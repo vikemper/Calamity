@@ -110,6 +110,26 @@ namespace Content.Server.GameTicking
             if (_map.MapExists(DefaultMap))
                 return;
 
+            // Try restoring before adding the selected preset's rules. A complete world snapshot already
+            // contains its running rule entities, so adding fresh copies here would duplicate them.
+            var restoreMap = _gameMapManager.GetSelectedMap();
+            if (restoreMap == null)
+            {
+                _gameMapManager.SelectMapByConfigRules();
+                restoreMap = _gameMapManager.GetSelectedMap();
+            }
+
+            if (restoreMap != null && _worldPersistence.TryLoadSavedWorldMap(restoreMap, out var restoredMapId, out _))
+            {
+                DefaultMap = restoredMapId;
+                if (_worldPersistence.RestoredFullWorldSnapshotThisBoot)
+                    CurrentPreset = Preset;
+                else
+                    AddGamePresetRules();
+
+                return;
+            }
+
             AddGamePresetRules();
 
             var maps = new List<GameMapPrototype>();
@@ -158,16 +178,7 @@ namespace Content.Server.GameTicking
 
             for (var i = 0; i < maps.Count; i++)
             {
-                MapId mapId;
-                if (i == 0 && _worldPersistence.TryLoadSavedWorldMap(maps[i], out mapId, out _))
-                {
-                    // The persistence system raised PostGameMapLoad for the restored map.
-                }
-                else
-                {
-                    LoadGameMap(maps[i], out mapId);
-                }
-
+                LoadGameMap(maps[i], out var mapId);
                 DebugTools.Assert(!_map.IsInitialized(mapId));
 
                 if (i == 0)
