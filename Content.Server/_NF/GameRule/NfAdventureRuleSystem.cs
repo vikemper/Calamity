@@ -91,6 +91,7 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
         SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawningEvent);
         SubscribeLocalEvent<PlayerDetachedEvent>(OnPlayerDetachedEvent);
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);
+        SubscribeLocalEvent<PostGameMapLoad>(OnPostGameMapLoad);
         _player.PlayerStatusChanged += PlayerManagerOnPlayerStatusChanged;
     }
 
@@ -220,7 +221,11 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
 
             // Store player info with the bank balance - we have it directly, and BankSystem won't have a cache yet.
             if (!_players.ContainsKey(mobUid))
-                _players[mobUid] = new PlayerRoundBankInformation(ev.Profile.BankBalance, MetaData(mobUid).EntityName, ev.Player.UserId);
+            {
+                var playerInfo = new PlayerRoundBankInformation(ev.Profile.BankBalance, MetaData(mobUid).EntityName, ev.Player.UserId);
+                _players[mobUid] = playerInfo;
+                WriteRoundBankInfo(mobUid, playerInfo);
+            }
         }
     }
 
@@ -238,6 +243,7 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
             _bank.TryGetBalance(ev.Player, out var bankBalance))
         {
             value.EndBalance = bankBalance;
+            WriteRoundBankInfo(mobUid, value);
         }
     }
 
@@ -259,11 +265,43 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
             _bank.TryGetBalance(e.Session, out var bankBalance))
         {
             value.EndBalance = bankBalance;
+            WriteRoundBankInfo(mobUid, value);
         }
+    }
+
+    private void OnPostGameMapLoad(PostGameMapLoad ev)
+    {
+        if (!ev.Restored)
+            return;
+
+        _players.Clear();
+        var query = EntityQueryEnumerator<NFAdventurePlayerRoundBankComponent>();
+        while (query.MoveNext(out var uid, out var info))
+        {
+            _players[uid] = new PlayerRoundBankInformation(info.StartBalance, info.Name, info.UserId)
+            {
+                EndBalance = info.EndBalance,
+            };
+        }
+    }
+
+    private void WriteRoundBankInfo(EntityUid uid, PlayerRoundBankInformation info)
+    {
+        var component = EnsureComp<NFAdventurePlayerRoundBankComponent>(uid);
+        component.StartBalance = info.StartBalance;
+        component.EndBalance = info.EndBalance;
+        component.Name = info.Name;
+        component.UserId = info.UserId;
     }
 
     private void OnRoundRestart(RoundRestartCleanupEvent ev)
     {
+        foreach (var uid in _players.Keys.ToArray())
+        {
+            if (Exists(uid))
+                RemComp<NFAdventurePlayerRoundBankComponent>(uid);
+        }
+
         _players.Clear();
     }
 
