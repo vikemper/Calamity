@@ -12,6 +12,7 @@ using Content.Server.Roles;
 using Content.Server.Station.Systems;
 using Content.Server._NF.Bank;
 using Content.Server._NF.GameRule;
+using Content.Shared._Calamity.CCVar;
 using Content.Shared.CCVar;
 using Content.Shared.Database;
 using Content.Shared.GameTicking;
@@ -508,6 +509,12 @@ namespace Content.Server.GameTicking
             if (DummyTicker)
                 return;
 
+            if (_cfg.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            {
+                _sawmill.Warning("Ignoring a round end request while persistent-round mode is enabled.");
+                return;
+            }
+
             DebugTools.Assert(RunLevel == GameRunLevel.InRound);
             _sawmill.Info("Ending round!");
 
@@ -973,6 +980,12 @@ namespace Content.Server.GameTicking
             // Handle restart for server update
             if (_serverUpdates.RoundEnded())
                 return;
+
+            if (_cfg.GetCVar(CalamityCCVars.PersistentRoundEnabled) && RunLevel == GameRunLevel.InRound)
+            {
+                _sawmill.Warning("Ignoring a round restart request while persistent-round mode is active.");
+                return;
+            }
 
             // Check if the GamePreset needs to be reset
             TryResetPreset();

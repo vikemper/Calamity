@@ -1,6 +1,8 @@
 using Content.Server.Administration;
 using Content.Server.RoundEnd;
 using Content.Shared.Administration;
+using Content.Shared._Calamity.CCVar;
+using Robust.Shared.Configuration;
 using Robust.Shared.Console;
 
 namespace Content.Server.GameTicking.Commands
@@ -9,6 +11,7 @@ namespace Content.Server.GameTicking.Commands
     public sealed partial class RestartRoundCommand : IConsoleCommand
     {
         [Dependency] private IEntityManager _e = default!;
+        [Dependency] private IConfigurationManager _configuration = default!;
 
         public string Command => "restartround";
         public string Description => "Ends the current round and starts the countdown for the next lobby.";
@@ -16,6 +19,12 @@ namespace Content.Server.GameTicking.Commands
 
         public void Execute(IConsoleShell shell, string argStr, string[] args)
         {
+            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            {
+                shell.WriteLine(Loc.GetString("calamity-persistent-round-protected"));
+                return;
+            }
+
             var ticker = _e.System<GameTicker>();
 
             if (ticker.RunLevel != GameRunLevel.InRound)
@@ -32,6 +41,7 @@ namespace Content.Server.GameTicking.Commands
     public sealed partial class RestartRoundNowCommand : IConsoleCommand
     {
         [Dependency] private IEntityManager _e = default!;
+        [Dependency] private IConfigurationManager _configuration = default!;
 
         public string Command => "restartroundnow";
         public string Description => "Moves the server from PostRound to a new PreRoundLobby.";
@@ -39,6 +49,12 @@ namespace Content.Server.GameTicking.Commands
 
         public void Execute(IConsoleShell shell, string argStr, string[] args)
         {
+            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            {
+                shell.WriteLine(Loc.GetString("calamity-persistent-round-protected"));
+                return;
+            }
+
             _e.System<GameTicker>().RestartRound();
         }
     }

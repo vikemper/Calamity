@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading.Tasks;
+using Content.Shared._Calamity.CCVar;
 using Content.Server.GameTicking.Presets;
 using Content.Server.Maps;
 using Content.Shared.CCVar;
@@ -106,6 +107,12 @@ public sealed partial class GameTicker
 
     private void InitializeGamePreset()
     {
+        if (_cfg.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+        {
+            SetGamePreset("CalamityPersistent");
+            return;
+        }
+
         SetGamePreset(LobbyEnabled ? _cfg.GetCVar(CCVars.GameLobbyDefaultPreset) : "sandbox");
     }
 

@@ -1,0 +1,5 @@
+- type: gamePreset
+  id: CalamityPersistent
+  name: calamity-persistent-title
+  description: calamity-persistent-description
+  showInVote: false

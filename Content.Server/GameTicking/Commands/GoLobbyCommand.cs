@@ -1,6 +1,7 @@
 ﻿using Content.Server.Administration;
 using Content.Server.GameTicking.Presets;
 using Content.Shared.Administration;
+using Content.Shared._Calamity.CCVar;
 using Content.Shared.CCVar;
 using Robust.Shared.Configuration;
 using Robust.Shared.Console;
@@ -11,12 +12,19 @@ namespace Content.Server.GameTicking.Commands
     public sealed partial class GoLobbyCommand : IConsoleCommand
     {
         [Dependency] private IEntityManager _e = default!;
+        [Dependency] private IConfigurationManager _configuration = default!;
 
         public string Command => "golobby";
         public string Description => "Enables the lobby and restarts the round.";
         public string Help => $"Usage: {Command} / {Command} <preset>";
         public void Execute(IConsoleShell shell, string argStr, string[] args)
         {
+            if (_configuration.GetCVar(CalamityCCVars.PersistentRoundEnabled))
+            {
+                shell.WriteLine(Loc.GetString("calamity-persistent-round-protected"));
+                return;
+            }
+
             GamePresetPrototype? preset = null;
             var presetName = string.Join(" ", args);
 

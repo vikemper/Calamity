@@ -6,6 +6,12 @@ namespace Content.Shared._Calamity.CCVar;
 public sealed class CalamityCCVars
 {
     /// <summary>
+    /// Keeps Calamity in one continuous game session instead of restarting rounds.
+    /// </summary>
+    public static readonly CVarDef<bool> PersistentRoundEnabled =
+        CVarDef.Create("calamity.persistence.persistent_round", true, CVar.SERVERONLY);
+
+    /// <summary>
     /// Enables automatic snapshots of the active world map.
     /// </summary>
     public static readonly CVarDef<bool> WorldPersistenceEnabled =
