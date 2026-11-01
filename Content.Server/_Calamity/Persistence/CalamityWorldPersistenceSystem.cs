@@ -27,6 +27,7 @@ namespace Content.Server._Calamity.Persistence;
 public sealed class CalamityWorldPersistenceSystem : EntitySystem
 {
     private const string SnapshotDirectoryName = "Calamity/Persistence";
+    private const string MainMapKey = "main";
     private const int RetainedSnapshots = 2;
 
     [Dependency] private IBaseServer _baseServer = default!;
@@ -79,7 +80,27 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     public void SetWorldMap(MapId mapId)
     {
         _worldMap = mapId;
+        RegisterPersistentMap(MainMapKey, mapId);
         _nextSaveAt = _timing.RealTime + GetSaveInterval();
+    }
+
+    /// <summary>
+    /// Registers a world map under an identifier that remains stable across server restarts.
+    /// Sector systems can use coordinates in place of runtime MapIds.
+    /// </summary>
+    public void RegisterPersistentMap(string key, MapId mapId)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+        {
+            throw new ArgumentException("Persistent map keys may contain only ASCII letters, numbers, '-' and '_'.", nameof(key));
+        }
+
+        if (!_mapSystem.TryGetMap(mapId, out var mapUid) || mapUid == null)
+            throw new ArgumentException($"Map {mapId} does not exist.", nameof(mapId));
+
+        var persistentMap = EnsureComp<CalamityPersistentMapComponent>(mapUid.Value);
+        persistentMap.Key = key;
     }
 
     /// <summary>
@@ -205,7 +226,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 .Select(GetEpoch)
                 .DefaultIfEmpty(0)
                 .Max() + 1;
-            var snapshotName = $"world-{epoch:D8}.yml";
+            var snapshotName = $"world-{epoch:D8}-{MainMapKey}.yml";
             var markerName = $"world-{epoch:D8}.complete";
             var temporaryMarkerName = $"world-{epoch:D8}.complete.tmp";
             var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
