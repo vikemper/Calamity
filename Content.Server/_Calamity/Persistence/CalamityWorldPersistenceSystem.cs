@@ -259,7 +259,16 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
             WriteText(directory, new ResPath(temporaryMarkerName), snapshotName);
             directory.Rename(new ResPath(temporaryMarkerName), new ResPath(markerName));
-            PruneSnapshots(directory);
+
+            try
+            {
+                PruneSnapshots(directory);
+            }
+            catch (Exception exception)
+            {
+                Log.Warning($"World snapshot {snapshotName} was committed, but old snapshots could not be pruned: {exception}");
+            }
+
             Log.Info($"Completed {reason} world snapshot {snapshotName}.");
             Announce("calamity-world-save-complete");
         }
