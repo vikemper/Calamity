@@ -453,7 +453,8 @@ namespace Content.Server.GameTicking
             }
 
             // MapInitialize *before* spawning players, our codebase is too shit to do it afterwards...
-            _map.InitializeMap(DefaultMap);
+            if (!_map.IsInitialized(DefaultMap))
+                _map.InitializeMap(DefaultMap);
 
             SpawnPlayers(readyPlayers, readyPlayerProfiles, force);
 
