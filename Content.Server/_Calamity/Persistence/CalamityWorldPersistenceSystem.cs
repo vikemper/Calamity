@@ -474,9 +474,6 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) || _worldMap == null)
             return;
 
-        if (!_worldHasEnteredRound)
-            return;
-
         if (_queuedSaveReason == null)
             Announce("calamity-world-save-starting");
 
