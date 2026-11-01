@@ -130,6 +130,9 @@ public sealed partial class StationSystem : SharedStationSystem
 
     private void OnPostGameMapLoad(PostGameMapLoad ev)
     {
+        if (ev.Restored)
+            return;
+
         var dict = new Dictionary<string, List<EntityUid>>();
 
         // Iterate over all BecomesStation

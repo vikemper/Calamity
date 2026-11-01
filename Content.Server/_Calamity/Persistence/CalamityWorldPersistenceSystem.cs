@@ -12,6 +12,7 @@ using Content.Shared.Maps;
 using Robust.Server;
 using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
+using Robust.Shared.EntitySerialization;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map.Components;
@@ -23,8 +24,8 @@ using Robust.Shared.Utility;
 namespace Content.Server._Calamity.Persistence;
 
 /// <summary>
-/// Saves and restores the active world map using committed, versioned snapshots.
-/// This is the first single-map persistence slice; sector state will be added separately.
+/// Saves and restores server entity state using committed, versioned snapshots.
+/// Sector-specific identity and navigation will be added separately.
 /// </summary>
 public sealed class CalamityWorldPersistenceSystem : EntitySystem
 {
@@ -155,17 +156,66 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 }
 
                 var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
-                if (!_mapLoader.TryLoadMap(snapshotPath, out var map, out var loadedGrids) || map == null)
+                MapId restoredMapId;
+                IReadOnlyList<EntityUid> restoredGrids;
+
+                if (snapshotName.EndsWith("-universe.yml", StringComparison.Ordinal))
                 {
-                    Log.Error($"Could not load world snapshot {snapshotPath}; trying the previous committed snapshot.");
-                    continue;
+                    var loadOptions = MapLoadOptions.Default;
+                    loadOptions.ExpectedCategory = FileCategory.Save;
+                    if (!_mapLoader.TryLoadGeneric(snapshotPath, out LoadResult? loadedState, loadOptions) || loadedState == null)
+                    {
+                        Log.Error($"Could not load world snapshot {snapshotPath}; trying the previous committed snapshot.");
+                        continue;
+                    }
+
+                    Entity<MapComponent>? mainMap = null;
+                    foreach (var candidate in loadedState.Maps)
+                    {
+                        if (!TryComp(candidate.Owner, out CalamityPersistentMapComponent? persistentMap) ||
+                            persistentMap.Key != MainMapKey)
+                        {
+                            continue;
+                        }
+
+                        mainMap = candidate;
+                        break;
+                    }
+
+                    if (mainMap == null)
+                    {
+                        _mapLoader.Delete(loadedState);
+                        Log.Error($"World snapshot {snapshotPath} did not contain a map registered as '{MainMapKey}'; trying the previous committed snapshot.");
+                        continue;
+                    }
+
+                    restoredMapId = mainMap.Value.Comp.MapId;
+                    restoredGrids = loadedState.Grids
+                        .Where(grid => Transform(grid.Owner).MapID == restoredMapId)
+                        .Select(grid => grid.Owner)
+                        .ToArray();
+                }
+                else
+                {
+                    // Read older committed snapshots that only contain the main map.
+                    if (!_mapLoader.TryLoadMap(snapshotPath, out var map, out var loadedGrids) || map == null)
+                    {
+                        Log.Error($"Could not load world snapshot {snapshotPath}; trying the previous committed snapshot.");
+                        continue;
+                    }
+
+                    restoredMapId = map.Value.Comp.MapId;
+                    restoredGrids = loadedGrids.Select(grid => grid.Owner).ToArray();
+                    _metadata.SetEntityName(map.Value.Owner, prototype.MapName);
                 }
 
-                mapId = map.Value.Comp.MapId;
-                grids = loadedGrids.Select(grid => grid.Owner).ToArray();
-                _metadata.SetEntityName(map.Value.Owner, prototype.MapName);
+                mapId = restoredMapId;
+                grids = restoredGrids;
+                if (_mapSystem.TryGetMap(mapId, out var restoredMapEntity) && restoredMapEntity != null)
+                    _metadata.SetEntityName(restoredMapEntity.Value, prototype.MapName);
+
                 RestoreLoadedPlayerMindData();
-                RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null));
+                RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null, restored: true));
                 RestoredSavedWorldMapThisBoot = true;
                 SetWorldMap(mapId);
                 Log.Info($"Restored world map from snapshot {snapshotPath}.");
@@ -247,14 +297,14 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 .Select(GetEpoch)
                 .DefaultIfEmpty(0)
                 .Max() + 1;
-            var snapshotName = $"world-{epoch:D8}-{MainMapKey}.yml";
+            var snapshotName = $"world-{epoch:D8}-universe.yml";
             var markerName = $"world-{epoch:D8}.complete";
             var temporaryMarkerName = $"world-{epoch:D8}.complete.tmp";
             var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
 
-            if (!_mapLoader.TrySaveMap(mapEntity.Value, snapshotPath) || !directory.Exists(snapshotPath))
+            if (!_mapLoader.TrySaveAllEntities(snapshotPath) || !directory.Exists(snapshotPath))
             {
-                Log.Error($"Failed to write world snapshot {snapshotPath}.");
+                Log.Error($"Failed to write server world snapshot {snapshotPath}.");
                 Announce("calamity-world-save-failed");
                 _saveInProgress = false;
                 ScheduleNextSave();

@@ -28,7 +28,18 @@ public sealed partial class StarSystemMapSystem : SharedStarSystemMapSystem
         var comp = EnsureComp<StarSystemMapComponent>(mapUid.Value);
 
         if (comp.System is { } system)
-            SetSystem((mapUid.Value, comp), system);
+        {
+            if (ev.Restored)
+            {
+                comp.StarSystem = BuildPlanetarySystem(system);
+                Dirty(mapUid.Value, comp);
+                EnsureComp<StarLightComponent>(mapUid.Value);
+            }
+            else
+            {
+                SetSystem((mapUid.Value, comp), system);
+            }
+        }
     }
 
     public void SetSystem(Entity<StarSystemMapComponent> ent, ProtoId<StarSystemPrototype> system)

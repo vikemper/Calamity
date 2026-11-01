@@ -1229,13 +1229,15 @@ namespace Content.Server.GameTicking
         public readonly MapId Map;
         public readonly IReadOnlyList<EntityUid> Grids;
         public readonly string? StationName;
+        public readonly bool Restored;
 
-        public PostGameMapLoad(GameMapPrototype gameMap, MapId map, IReadOnlyList<EntityUid> grids, string? stationName)
+        public PostGameMapLoad(GameMapPrototype gameMap, MapId map, IReadOnlyList<EntityUid> grids, string? stationName, bool restored = false)
         {
             GameMap = gameMap;
             Map = map;
             Grids = grids;
             StationName = stationName;
+            Restored = restored;
         }
     }
 

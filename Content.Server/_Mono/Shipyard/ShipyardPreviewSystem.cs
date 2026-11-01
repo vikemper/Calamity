@@ -49,6 +49,10 @@ public sealed class ShipyardPreviewSystem : SharedShipyardPreviewSystem
 
     private void EnsureMap()
     {
+        var previewMaps = EntityQueryEnumerator<PreviewMapComponent, MapComponent>();
+        if (previewMaps.MoveNext(out _, out _, out _))
+            return;
+
         var mapUid = _map.CreateMap();
         var pMap = EnsureComp<PreviewMapComponent>(mapUid);
 
