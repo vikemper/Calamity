@@ -1,5 +1,6 @@
 using Content.Server._Mono.Company; // Mono
 using Content.Server._Mono.MonoCoins; // Mono
+using Content.Server._Calamity.Persistence;
 using Content.Server._NF.Auth;
 using Content.Server.Acz;
 using Content.Server.Administration;
@@ -160,6 +161,7 @@ namespace Content.Server.Entry
                 IoCManager.Resolve<CompanyManager>().Initialize(); // Mono
                 IoCManager.Resolve<MonoCoinsManager>().Initialize(); // Mono
                 IoCManager.Resolve<IGameMapManager>().Initialize();
+                IoCManager.Resolve<CalamityWorldPersistenceSystem>().RestoreLatestRuntimeContent();
                 IoCManager.Resolve<IEntitySystemManager>().GetEntitySystem<GameTicker>().PostInitialize();
                 IoCManager.Resolve<IBanManager>().Initialize();
                 IoCManager.Resolve<IConnectionManager>().PostInit();

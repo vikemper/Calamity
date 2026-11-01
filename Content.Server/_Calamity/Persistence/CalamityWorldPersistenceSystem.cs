@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Content.Server.Atmos.Rotting;
 using Content.Server.Chat.Managers;
 using Content.Server.GameTicking;
@@ -14,6 +15,7 @@ using Content.Shared.Mind;
 using Content.Shared.Mind.Components;
 using Content.Shared.Maps;
 using Robust.Server;
+using Robust.Server.Upload;
 using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
 using Robust.Shared.EntitySerialization;
@@ -36,6 +38,11 @@ namespace Content.Server._Calamity.Persistence;
 public sealed class CalamityWorldPersistenceSystem : EntitySystem
 {
     private const string SnapshotDirectoryName = "Calamity/Persistence";
+    private const string SnapshotAssetDirectorySuffix = "-assets";
+    private const string SnapshotAssetManifestName = "complete";
+    private const string SnapshotResourceDirectoryName = "resources";
+    private const string SnapshotPrototypeDirectoryName = "prototypes";
+    private const string SnapshotAssetManifestVersion = "runtime-content-v1";
     private const string MainMapKey = "main";
     private const int RetainedSnapshots = 2;
     private static readonly TimeSpan PlayerCorpseReviveWindow = TimeSpan.FromMinutes(5);
@@ -52,6 +59,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     [Dependency] private MapLoaderSystem _mapLoader = default!;
     [Dependency] private MetaDataSystem _metadata = default!;
     [Dependency] private IPrototypeManager _prototypeManager = default!;
+    [Dependency] private NetworkResourceManager _networkResourceManager = default!;
+    [Dependency] private GamePrototypeLoadManager _prototypeLoadManager = default!;
 
     private MapId? _worldMap;
     private TimeSpan _nextSaveAt;
@@ -60,6 +69,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     private bool _saveInProgress;
     private bool _shutdownSaveAttempted;
     private bool _worldHasEnteredRound;
+    private bool _runtimeContentRestored;
+    private int? _runtimeContentSnapshotEpoch;
 
     /// <summary>
     /// True after this server boot restored a previously saved world map.
@@ -102,6 +113,56 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             _timing.RealTime >= _nextSaveAt)
         {
             QueueSnapshot("autosave");
+        }
+    }
+
+    /// <summary>
+    /// Loads runtime-uploaded resources and prototypes from the newest usable committed snapshot.
+    /// EntryPoint calls this before accepting player connections so clients receive the restored content
+    /// through the normal upload handshake.
+    /// </summary>
+    public void RestoreLatestRuntimeContent()
+    {
+        if (_runtimeContentRestored)
+            return;
+
+        _runtimeContentRestored = true;
+        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled))
+            return;
+
+        var directory = GetSnapshotDirectory(create: false);
+        if (directory == null)
+            return;
+
+        foreach (var marker in GetCommittedSnapshots(directory))
+        {
+            try
+            {
+                var snapshotName = ReadText(directory, marker).Trim();
+                if (!IsSnapshotFileName(snapshotName))
+                {
+                    Log.Error($"Ignoring invalid persistence marker {marker} while restoring uploaded content.");
+                    continue;
+                }
+
+                var epoch = GetEpoch(marker);
+                var assetPath = GetSnapshotAssetDirectoryPath(epoch);
+                if (!directory.Exists(assetPath))
+                {
+                    // Snapshots written before runtime-content support have no asset directory.
+                    _runtimeContentSnapshotEpoch = epoch;
+                    return;
+                }
+
+                RestoreRuntimeContent(directory, epoch);
+                _runtimeContentSnapshotEpoch = epoch;
+                Log.Info($"Restored runtime-uploaded content from world snapshot {snapshotName}.");
+                return;
+            }
+            catch (Exception exception)
+            {
+                Log.Error($"Failed to restore runtime-uploaded content from snapshot marker {marker}: {exception}; trying the previous committed snapshot.");
+            }
         }
     }
 
@@ -176,6 +237,9 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
         foreach (var marker in GetCommittedSnapshots(directory))
         {
+            if (_runtimeContentSnapshotEpoch is { } assetEpoch && GetEpoch(marker) > assetEpoch)
+                continue;
+
             var snapshotName = string.Empty;
             var snapshotPath = default(ResPath);
             var isFullWorldSnapshot = false;
@@ -493,6 +557,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 return;
             }
 
+            SaveRuntimeContent(directory, epoch);
+
             WriteText(directory, new ResPath(temporaryMarkerName), snapshotName);
             directory.Rename(new ResPath(temporaryMarkerName), new ResPath(markerName));
 
@@ -599,7 +665,114 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             if (IsSnapshotFileName(snapshotName))
                 directory.Delete(new ResPath(snapshotName));
 
+            var assetPath = GetSnapshotAssetDirectoryPath(GetEpoch(marker));
+            if (directory.Exists(assetPath))
+                directory.Delete(assetPath);
+
             directory.Delete(marker);
         }
+    }
+
+    private void SaveRuntimeContent(IWritableDirProvider directory, int epoch)
+    {
+        var assetPath = GetSnapshotAssetDirectoryPath(epoch);
+        directory.Delete(assetPath);
+        directory.CreateDir(assetPath);
+        var assetDirectory = directory.OpenSubdirectory(assetPath);
+
+        var resourcePath = new ResPath(SnapshotResourceDirectoryName);
+        assetDirectory.CreateDir(resourcePath);
+        var resourceDirectory = assetDirectory.OpenSubdirectory(resourcePath);
+        var uploadedFiles = _networkResourceManager.GetFilesForPersistence();
+        for (var index = 0; index < uploadedFiles.Count; index++)
+        {
+            var (relative, data) = uploadedFiles[index];
+            ValidateRuntimeResourcePath(relative.CanonPath);
+
+            using var stream = resourceDirectory.Open(
+                new ResPath($"resource-{index:D8}.bin"),
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None);
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+            writer.Write(relative.CanonPath);
+            writer.Write(data.Length);
+            writer.Write(data);
+            writer.Flush();
+            stream.Flush();
+        }
+
+        var prototypePath = new ResPath(SnapshotPrototypeDirectoryName);
+        assetDirectory.CreateDir(prototypePath);
+        var prototypeDirectory = assetDirectory.OpenSubdirectory(prototypePath);
+        var prototypes = _prototypeLoadManager.GetPrototypesForPersistence();
+        for (var index = 0; index < prototypes.Count; index++)
+        {
+            WriteText(prototypeDirectory, new ResPath($"prototype-{index:D8}.yml"), prototypes[index]);
+        }
+
+        WriteText(assetDirectory, new ResPath(SnapshotAssetManifestName), SnapshotAssetManifestVersion);
+    }
+
+    private void RestoreRuntimeContent(IWritableDirProvider directory, int epoch)
+    {
+        var assetPath = GetSnapshotAssetDirectoryPath(epoch);
+        var assetDirectory = directory.OpenSubdirectory(assetPath);
+        var manifestPath = new ResPath(SnapshotAssetManifestName);
+        if (!assetDirectory.Exists(manifestPath) ||
+            ReadText(assetDirectory, manifestPath).Trim() != SnapshotAssetManifestVersion)
+        {
+            throw new InvalidDataException($"Snapshot assets for epoch {epoch} have no supported completion manifest.");
+        }
+
+        var resourceDirectory = assetDirectory.OpenSubdirectory(new ResPath(SnapshotResourceDirectoryName));
+        var uploadedFiles = new List<(ResPath Relative, byte[] Data)>();
+        foreach (var file in resourceDirectory.Find("resource-*.bin", recursive: false).files
+                     .OrderBy(path => path.ToString(), StringComparer.Ordinal))
+        {
+            using var stream = resourceDirectory.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
+            var path = ValidateRuntimeResourcePath(reader.ReadString());
+            var dataLength = reader.ReadInt32();
+            if (dataLength < 0 || dataLength > stream.Length - stream.Position)
+                throw new InvalidDataException($"Uploaded resource record {file} has an invalid data length.");
+
+            var data = reader.ReadBytes(dataLength);
+            if (data.Length != dataLength || stream.Position != stream.Length)
+                throw new InvalidDataException($"Uploaded resource record {file} is truncated or has trailing data.");
+
+            uploadedFiles.Add((path, data));
+        }
+
+        var prototypeDirectory = assetDirectory.OpenSubdirectory(new ResPath(SnapshotPrototypeDirectoryName));
+        var prototypes = prototypeDirectory.Find("prototype-*.yml", recursive: false).files
+            .OrderBy(path => path.ToString(), StringComparer.Ordinal)
+            .Select(path => ReadText(prototypeDirectory, path))
+            .ToArray();
+
+        // Client connections start after this method returns, so the regular upload handshake sends
+        // resources first and prototypes second, before any restored map entities are replicated.
+        _networkResourceManager.RestorePersistentFiles(uploadedFiles);
+        _prototypeLoadManager.RestorePersistentPrototypes(prototypes);
+    }
+
+    private static ResPath ValidateRuntimeResourcePath(string path)
+    {
+        if (!ResPath.IsValidPath(path))
+            throw new InvalidDataException($"Runtime resource path '{path}' contains an invalid separator.");
+
+        var relative = new ResPath(path);
+        if (relative.IsRooted || relative.IsSelf || relative.Clean().CanonPath != path ||
+            path.Split('/').Any(segment => segment is ".." or "." or ""))
+        {
+            throw new InvalidDataException($"Runtime resource path '{path}' is not a normalized relative path.");
+        }
+
+        return relative;
+    }
+
+    private static ResPath GetSnapshotAssetDirectoryPath(int epoch)
+    {
+        return new ResPath($"world-{epoch:D8}{SnapshotAssetDirectorySuffix}");
     }
 }
