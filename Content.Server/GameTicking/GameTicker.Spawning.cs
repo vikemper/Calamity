@@ -149,8 +149,16 @@ namespace Content.Server.GameTicking
         private bool TryResumePersistentCharacter(ICommonSession player, bool silent = false)
         {
             if (!_worldPersistence.RestoredSavedWorldMapThisBoot ||
-                !_mind.TryGetMind(player.UserId, out _, out var mind) ||
-                mind.CurrentEntity is not { } entity ||
+                !_mind.TryGetMind(player.UserId, out var mindId, out var mind) ||
+                mindId == null)
+            {
+                return false;
+            }
+
+            if (!_worldPersistence.MatchesSelectedCharacter(player.UserId, mindId.Value, mind))
+                return false;
+
+            if (mind.CurrentEntity is not { } entity ||
                 TerminatingOrDeleted(entity))
             {
                 return false;

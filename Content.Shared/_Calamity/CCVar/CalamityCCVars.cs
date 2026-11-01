@@ -22,4 +22,10 @@ public sealed class CalamityCCVars
     /// </summary>
     public static readonly CVarDef<float> WorldPersistenceInterval =
         CVarDef.Create("calamity.persistence.interval", 1200f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How long an abandoned persistent character's corpse remains before despawning, in seconds.
+    /// </summary>
+    public static readonly CVarDef<float> AbandonedCharacterCorpseLifetime =
+        CVarDef.Create("calamity.persistence.abandoned_character_corpse_lifetime", 1200f, CVar.SERVERONLY);
 }

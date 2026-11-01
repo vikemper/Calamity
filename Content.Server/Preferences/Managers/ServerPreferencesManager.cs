@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Content.Server.Database;
 using Content.Shared.CCVar;
 using Content.Shared.Preferences;
+using Robust.Shared.GameObjects;
 using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.Network;
@@ -64,6 +65,7 @@ namespace Content.Server.Preferences.Managers
             }
 
             var curPrefs = prefsData.Prefs!;
+            var previousIndex = curPrefs.SelectedCharacterIndex;
 
             if (!curPrefs.Characters.ContainsKey(index))
             {
@@ -72,6 +74,7 @@ namespace Content.Server.Preferences.Managers
             }
 
             prefsData.Prefs = new PlayerPreferences(curPrefs.Characters, index, curPrefs.AdminOOCColor);
+            RaiseCharacterSelectionChanged(userId, previousIndex, index);
 
             if (ShouldStorePrefs(message.MsgChannel.AuthType))
             {
@@ -103,6 +106,7 @@ namespace Content.Server.Preferences.Managers
                 return;
 
             var curPrefs = prefsData.Prefs!;
+            var previousIndex = curPrefs.SelectedCharacterIndex;
             var session = _playerManager.GetSessionById(userId);
 
             profile.EnsureValid(session, _dependencies);
@@ -126,6 +130,7 @@ namespace Content.Server.Preferences.Managers
             };
 
             prefsData.Prefs = new PlayerPreferences(profiles, slot, curPrefs.AdminOOCColor);
+            RaiseCharacterSelectionChanged(userId, previousIndex, slot);
 
             if (ShouldStorePrefs(session.Channel.AuthType))
                 await _db.SaveCharacterSlotAsync(userId, profile, slot);
@@ -148,6 +153,7 @@ namespace Content.Server.Preferences.Managers
             }
 
             var curPrefs = prefsData.Prefs!;
+            var previousIndex = curPrefs.SelectedCharacterIndex;
 
             // If they try to delete the slot they have selected then we switch to another one.
             // Of course, that's only if they HAVE another slot.
@@ -169,6 +175,7 @@ namespace Content.Server.Preferences.Managers
             arr.Remove(slot);
 
             prefsData.Prefs = new PlayerPreferences(arr, nextSlot ?? curPrefs.SelectedCharacterIndex, curPrefs.AdminOOCColor);
+            RaiseCharacterSelectionChanged(userId, previousIndex, prefsData.Prefs.SelectedCharacterIndex);
 
             if (ShouldStorePrefs(message.MsgChannel.AuthType))
             {
@@ -181,6 +188,15 @@ namespace Content.Server.Preferences.Managers
                     await _db.SaveCharacterSlotAsync(userId, null, slot);
                 }
             }
+        }
+
+        private void RaiseCharacterSelectionChanged(NetUserId userId, int previousIndex, int selectedIndex)
+        {
+            if (previousIndex == selectedIndex)
+                return;
+
+            _entityManager.EventBus.RaiseEvent(EventSource.Local,
+                new PlayerSelectedCharacterChangedEvent(userId, previousIndex, selectedIndex));
         }
 
         // Should only be called via UserDbDataManager.
@@ -391,6 +407,20 @@ namespace Content.Server.Preferences.Managers
         {
             Session = session;
             Prefs = prefs;
+        }
+    }
+
+    public sealed class PlayerSelectedCharacterChangedEvent : EntityEventArgs
+    {
+        public readonly NetUserId UserId;
+        public readonly int PreviousCharacterSlot;
+        public readonly int SelectedCharacterSlot;
+
+        public PlayerSelectedCharacterChangedEvent(NetUserId userId, int previousCharacterSlot, int selectedCharacterSlot)
+        {
+            UserId = userId;
+            PreviousCharacterSlot = previousCharacterSlot;
+            SelectedCharacterSlot = selectedCharacterSlot;
         }
     }
     // End Frontier
