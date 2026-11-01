@@ -102,6 +102,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         SubscribeLocalEvent<GameRunLevelChangedEvent>(OnGameRunLevelChanged);
         SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawnComplete);
         SubscribeLocalEvent<PlayerSelectedCharacterChangedEvent>(OnPlayerSelectedCharacterChanged);
+        SubscribeLocalEvent<MindContainerComponent, MindAddedMessage>(OnMindAddedToBody);
+        SubscribeLocalEvent<MobStateChangedEvent>(OnMobStateChanged);
     }
 
     public override void Update(float frameTime)
@@ -319,6 +321,20 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         while (minds.MoveNext(out var uid, out var mind))
         {
             _mindSystem.SynchronizePlayerMindData(uid, mind);
+
+            if (mind.UserId == null)
+                continue;
+
+            var body = mind.LastMob;
+            if (body == null || TerminatingOrDeleted(body.Value) || !HasComp<MobStateComponent>(body.Value))
+                body = mind.OwnedEntity;
+
+            if (body == null || TerminatingOrDeleted(body.Value) || !TryComp(body.Value, out MobStateComponent? mobState))
+                continue;
+
+            EnsureComp<CalamityPlayerCharacterBodyComponent>(body.Value);
+            if (mobState.CurrentState == MobState.Dead)
+                StartPlayerCorpseTimer(body.Value);
         }
     }
 
@@ -337,14 +353,12 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     private void OnPlayerSpawnComplete(PlayerSpawnCompleteEvent ev)
     {
+        EnsureComp<CalamityPlayerCharacterBodyComponent>(ev.Mob);
+
         if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
-            !_preferencesManager.TryGetCachedPreferences(ev.Player.UserId, out var preferences) ||
-            preferences == null ||
-            !_mindSystem.TryGetMind(ev.Player.UserId, out var mindId, out _) ||
-            mindId == null)
-        {
+            !_preferencesManager.TryGetCachedPreferences(ev.Player.UserId, out var preferences) || preferences == null ||
+            !_mindSystem.TryGetMind(ev.Player.UserId, out var mindId, out _) || mindId == null)
             return;
-        }
 
         var persistentCharacter = EnsureComp<CalamityPersistentCharacterComponent>(mindId.Value);
         persistentCharacter.CharacterSlot = preferences.SelectedCharacterIndex;
@@ -377,10 +391,68 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         if (body == null || TerminatingOrDeleted(body.Value) || !TryComp(body.Value, out MobStateComponent? mobState))
             return;
 
+        EnsureComp<CalamityPlayerCharacterBodyComponent>(body.Value);
         _mobState.ChangeMobState(body.Value, MobState.Dead, mobState);
-        var corpseLifetime = Math.Max(1f, _configuration.GetCVar(CalamityCCVars.AbandonedCharacterCorpseLifetime));
-        EnsureComp<TimedDespawnComponent>(body.Value).Lifetime = corpseLifetime;
-        Log.Info($"Abandoned persistent character for account {accountId}; corpse {ToPrettyString(body.Value)} will despawn in {corpseLifetime} seconds.");
+        StartPlayerCorpseTimer(body.Value);
+        Log.Info($"Abandoned persistent character for account {accountId}; corpse {ToPrettyString(body.Value)} will despawn after its player corpse timer.");
+    }
+
+    private void OnMindAddedToBody(EntityUid uid, MindContainerComponent component, MindAddedMessage ev)
+    {
+        if (ev.Mind.Comp.UserId != null)
+            EnsureComp<CalamityPlayerCharacterBodyComponent>(uid);
+    }
+
+    private void OnMobStateChanged(MobStateChangedEvent ev)
+    {
+        if (!HasComp<CalamityPlayerCharacterBodyComponent>(ev.Target))
+            return;
+
+        if (ev.NewMobState == MobState.Dead)
+        {
+            StartPlayerCorpseTimer(ev.Target);
+        }
+        else if (ev.OldMobState == MobState.Dead)
+        {
+            CancelPlayerCorpseTimer(ev.Target);
+        }
+    }
+
+    private void StartPlayerCorpseTimer(EntityUid body)
+    {
+        if (HasComp<CalamityPlayerCorpseDespawnComponent>(body))
+            return;
+
+        var corpseTimer = AddComp<CalamityPlayerCorpseDespawnComponent>(body);
+        var lifetime = Math.Max(1f, _configuration.GetCVar(CalamityCCVars.AbandonedCharacterCorpseLifetime));
+        if (TryComp(body, out TimedDespawnComponent? previousDespawn))
+        {
+            corpseTimer.HadPreviousTimedDespawn = true;
+            corpseTimer.PreviousTimedDespawnLifetime = previousDespawn.Lifetime;
+            previousDespawn.Lifetime = lifetime;
+        }
+        else
+        {
+            EnsureComp<TimedDespawnComponent>(body).Lifetime = lifetime;
+        }
+    }
+
+    private void CancelPlayerCorpseTimer(EntityUid body)
+    {
+        if (!TryComp(body, out CalamityPlayerCorpseDespawnComponent? corpseTimer))
+            return;
+
+        if (corpseTimer.HadPreviousTimedDespawn)
+        {
+            if (TryComp(body, out TimedDespawnComponent? despawn))
+                despawn.Lifetime = corpseTimer.PreviousTimedDespawnLifetime;
+        }
+        else
+        {
+            RemComp<TimedDespawnComponent>(body);
+        }
+
+        RemComp<CalamityPlayerCorpseDespawnComponent>(body);
     }
 
     private void OnShutdownRequested()
