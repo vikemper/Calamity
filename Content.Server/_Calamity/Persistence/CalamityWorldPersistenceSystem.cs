@@ -49,6 +49,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     private string? _queuedSaveReason;
     private bool _saveInProgress;
     private bool _shutdownSaveAttempted;
+    private bool _worldHasEnteredRound;
 
     /// <summary>
     /// True after this server boot restored a previously saved world map.
@@ -60,6 +61,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     {
         base.Initialize();
         _baseServer.ShutdownRequested += OnShutdownRequested;
+        SubscribeLocalEvent<GameRunLevelChangedEvent>(OnGameRunLevelChanged);
     }
 
     public override void Update(float frameTime)
@@ -76,6 +78,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         }
 
         if (_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) &&
+            _worldHasEnteredRound &&
             _worldMap != null &&
             !_saveInProgress &&
             _timing.RealTime >= _nextSaveAt)
@@ -118,8 +121,14 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     /// </summary>
     public bool RequestManualSave()
     {
-        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) || _worldMap == null || _saveInProgress || _queuedSaveReason != null)
+        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
+            !_worldHasEnteredRound ||
+            _worldMap == null ||
+            _saveInProgress ||
+            _queuedSaveReason != null)
+        {
             return false;
+        }
 
         QueueSnapshot("manual");
         return true;
@@ -249,6 +258,9 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) || _worldMap == null)
             return;
 
+        if (!_worldHasEnteredRound)
+            return;
+
         if (_queuedSaveReason == null)
             Announce("calamity-world-save-starting");
 
@@ -266,6 +278,15 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         _queuedSaveAt = _timing.RealTime + TimeSpan.FromSeconds(1);
         Announce("calamity-world-save-starting");
         Log.Info($"Queued {reason} world snapshot.");
+    }
+
+    private void OnGameRunLevelChanged(GameRunLevelChangedEvent ev)
+    {
+        if (ev.New != GameRunLevel.InRound || _worldHasEnteredRound)
+            return;
+
+        _worldHasEnteredRound = true;
+        ScheduleNextSave();
     }
 
     private void PerformSnapshot(string reason)
