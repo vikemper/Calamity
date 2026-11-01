@@ -4,8 +4,6 @@ cmd-calamityworldsave-queued = A world save has been queued.
 cmd-calamityworldsave-unavailable = A world save cannot be queued right now.
 calamity-world-save-button = Save World
 
-calamity-persistent-title = Persistent World
-calamity-persistent-description = A continuous world session without round restarts.
 calamity-persistent-round-protected = Round restarts are disabled while persistent world mode is active.
 
 calamity-world-save-starting = The server is saving the world. A brief pause may occur.

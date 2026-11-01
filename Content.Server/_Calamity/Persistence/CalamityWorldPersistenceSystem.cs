@@ -46,6 +46,12 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     private bool _saveInProgress;
     private bool _shutdownSaveAttempted;
 
+    /// <summary>
+    /// True after this server boot restored a previously saved world map.
+    /// Initial world generation can use this to avoid duplicating saved content.
+    /// </summary>
+    public bool RestoredSavedWorldMapThisBoot { get; private set; }
+
     public override void Initialize()
     {
         base.Initialize();
@@ -125,6 +131,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     {
         mapId = default;
         grids = Array.Empty<EntityUid>();
+        RestoredSavedWorldMapThisBoot = false;
 
         if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled))
             return false;
@@ -155,6 +162,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 grids = loadedGrids.Select(grid => grid.Owner).ToArray();
                 _metadata.SetEntityName(map.Value.Owner, prototype.MapName);
                 RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null));
+                RestoredSavedWorldMapThisBoot = true;
                 SetWorldMap(mapId);
                 Log.Info($"Restored world map from snapshot {snapshotPath}.");
                 return true;

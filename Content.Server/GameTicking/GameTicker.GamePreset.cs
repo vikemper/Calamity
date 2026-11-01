@@ -109,7 +109,7 @@ public sealed partial class GameTicker
     {
         if (_cfg.GetCVar(CalamityCCVars.PersistentRoundEnabled))
         {
-            SetGamePreset("CalamityPersistent");
+            SetGamePreset("NFPirate");
             return;
         }
 

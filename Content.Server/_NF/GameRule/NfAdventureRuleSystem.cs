@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Content.Server._Calamity.Persistence;
 using Content.Server._Mono.GameRule.Systems;
 using Content.Server._NF.Bank;
 using Content.Server._NF.GameRule.Components;
@@ -41,6 +42,7 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
     [Dependency] private IBaseServer _baseServer = default!;
     [Dependency] private IEntitySystemManager _entSys = default!;
     [Dependency] private HyperwarRuleSystem _hyperwar = default!;
+    [Dependency] private CalamityWorldPersistenceSystem _worldPersistence = default!;
 
     private readonly HttpClient _httpClient = new();
 
@@ -311,6 +313,14 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
     {
         if (_hyperwar.HyperwarActive)
         {
+            base.Started(uid, component, gameRule, args);
+            return;
+        }
+
+        if (_worldPersistence.RestoredSavedWorldMapThisBoot)
+        {
+            // The map already contains its generated points of interest. Recreate the game-rule state
+            // without spawning another copy of the world content or firing its generation event again.
             base.Started(uid, component, gameRule, args);
             return;
         }
