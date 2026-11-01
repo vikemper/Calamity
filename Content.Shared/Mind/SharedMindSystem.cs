@@ -123,6 +123,21 @@ public abstract partial class SharedMindSystem : EntitySystem
         return false;
     }
 
+    /// <summary>
+    /// Synchronizes session data with a mind that was restored from serialized world state.
+    /// </summary>
+    public void SynchronizePlayerMindData(EntityUid mindId, MindComponent mind)
+    {
+        if (mind.UserId is not { } userId ||
+            !_playerManager.TryGetPlayerData(userId, out var playerData) ||
+            playerData.ContentData() is not { } contentData)
+        {
+            return;
+        }
+
+        contentData.Mind = mindId;
+    }
+
     public bool TryGetMind(NetUserId user, [NotNullWhen(true)] out Entity<MindComponent>? mind)
     {
         if (!TryGetMind(user, out var mindId, out var mindComp))

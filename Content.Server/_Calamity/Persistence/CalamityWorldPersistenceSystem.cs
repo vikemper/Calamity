@@ -6,6 +6,8 @@ using Content.Server.GameTicking;
 using Content.Shared._Calamity.CCVar;
 using Content.Shared.Chat;
 using Content.Shared.GameTicking;
+using Content.Shared.Mind;
+using Content.Shared.Mind.Components;
 using Content.Shared.Maps;
 using Robust.Server;
 using Robust.Shared.Configuration;
@@ -33,6 +35,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     [Dependency] private IBaseServer _baseServer = default!;
     [Dependency] private IConfigurationManager _configuration = default!;
     [Dependency] private IChatManager _chatManager = default!;
+    [Dependency] private SharedMindSystem _mindSystem = default!;
     [Dependency] private SharedMapSystem _mapSystem = default!;
     [Dependency] private IResourceManager _resources = default!;
     [Dependency] private IGameTiming _timing = default!;
@@ -161,6 +164,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 mapId = map.Value.Comp.MapId;
                 grids = loadedGrids.Select(grid => grid.Owner).ToArray();
                 _metadata.SetEntityName(map.Value.Owner, prototype.MapName);
+                RestoreLoadedPlayerMindData();
                 RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null));
                 RestoredSavedWorldMapThisBoot = true;
                 SetWorldMap(mapId);
@@ -174,6 +178,15 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         }
 
         return false;
+    }
+
+    private void RestoreLoadedPlayerMindData()
+    {
+        var minds = EntityQueryEnumerator<MindComponent>();
+        while (minds.MoveNext(out var uid, out var mind))
+        {
+            _mindSystem.SynchronizePlayerMindData(uid, mind);
+        }
     }
 
     private void OnShutdownRequested()

@@ -90,10 +90,26 @@ namespace Content.Server.GameTicking
                 }
             }
 
-            var spawnableStations = GetSpawnableStations();
-            var assignedJobs = _stationJobs.AssignJobs(profiles, spawnableStations);
+            // A restored world already contains the characters and minds for users who were in the round
+            // when it was saved. Resume those characters instead of assigning them a new job and spawning
+            // a duplicate body. Players who were not ready remain in the lobby and can resume when they join.
+            var resumedPlayers = new HashSet<NetUserId>();
+            foreach (var player in readyPlayers)
+            {
+                if (!profiles.ContainsKey(player.UserId) || !TryResumePersistentCharacter(player))
+                    continue;
 
-            _stationJobs.AssignOverflowJobs(ref assignedJobs, playerNetIds, profiles, spawnableStations);
+                resumedPlayers.Add(player.UserId);
+            }
+
+            var profilesToAssign = profiles
+                .Where(pair => !resumedPlayers.Contains(pair.Key))
+                .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+            var spawnableStations = GetSpawnableStations();
+            var assignedJobs = _stationJobs.AssignJobs(profilesToAssign, spawnableStations);
+
+            _stationJobs.AssignOverflowJobs(ref assignedJobs, playerNetIds, profilesToAssign, spawnableStations);
 
             // Calculate extended access for stations.
             var stationJobCounts = spawnableStations.ToDictionary(e => e, _ => 0);
@@ -125,9 +141,28 @@ namespace Content.Server.GameTicking
 
             // Allow rules to add roles to players who have been spawned in. (For example, on-station traitors)
             RaiseLocalEvent(new RulePlayerJobsAssignedEvent(
-                assignedJobs.Keys.Select(x => _playerManager.GetSessionById(x)).ToArray(),
+                assignedJobs.Keys.Concat(resumedPlayers).Select(x => _playerManager.GetSessionById(x)).ToArray(),
                 profiles,
                 force));
+        }
+
+        private bool TryResumePersistentCharacter(ICommonSession player, bool silent = false)
+        {
+            if (!_worldPersistence.RestoredSavedWorldMapThisBoot ||
+                !_mind.TryGetMind(player.UserId, out _, out var mind) ||
+                mind.CurrentEntity is not { } entity ||
+                TerminatingOrDeleted(entity))
+            {
+                return false;
+            }
+
+            if (!_playerManager.SetAttachedEntity(player, entity, force: true))
+                return false;
+
+            PlayerJoinGame(player, silent);
+            _playTimeTrackings.PlayerRolesChanged(player);
+            _admin.UpdatePlayerList(player);
+            return true;
         }
 
         private void SpawnPlayer(ICommonSession player,
@@ -162,6 +197,9 @@ namespace Content.Server.GameTicking
         {
             // Can't spawn players with a dummy ticker!
             if (DummyTicker)
+                return;
+
+            if (TryResumePersistentCharacter(player))
                 return;
 
             if (station == EntityUid.Invalid)
