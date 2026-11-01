@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Content.Server.Atmos.Rotting;
 using Content.Server.Chat.Managers;
 using Content.Server.GameTicking;
 using Content.Server.Preferences.Managers;
@@ -39,6 +40,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     private const string SnapshotDirectoryName = "Calamity/Persistence";
     private const string MainMapKey = "main";
     private const int RetainedSnapshots = 2;
+    private static readonly TimeSpan PlayerCorpseReviveWindow = TimeSpan.FromMinutes(5);
 
     [Dependency] private IBaseServer _baseServer = default!;
     [Dependency] private IConfigurationManager _configuration = default!;
@@ -46,6 +48,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     [Dependency] private IServerPreferencesManager _preferencesManager = default!;
     [Dependency] private SharedMindSystem _mindSystem = default!;
     [Dependency] private MobStateSystem _mobState = default!;
+    [Dependency] private RottingSystem _rotting = default!;
     [Dependency] private SharedMapSystem _mapSystem = default!;
     [Dependency] private IResourceManager _resources = default!;
     [Dependency] private IGameTiming _timing = default!;
@@ -332,7 +335,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             if (body == null || TerminatingOrDeleted(body.Value) || !TryComp(body.Value, out MobStateComponent? mobState))
                 continue;
 
-            EnsureComp<CalamityPlayerCharacterBodyComponent>(body.Value);
+            MarkPlayerCharacterBody(body.Value);
             if (mobState.CurrentState == MobState.Dead)
                 StartPlayerCorpseTimer(body.Value);
         }
@@ -353,7 +356,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     private void OnPlayerSpawnComplete(PlayerSpawnCompleteEvent ev)
     {
-        EnsureComp<CalamityPlayerCharacterBodyComponent>(ev.Mob);
+        MarkPlayerCharacterBody(ev.Mob);
 
         if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
             !_preferencesManager.TryGetCachedPreferences(ev.Player.UserId, out var preferences) || preferences == null ||
@@ -391,7 +394,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         if (body == null || TerminatingOrDeleted(body.Value) || !TryComp(body.Value, out MobStateComponent? mobState))
             return;
 
-        EnsureComp<CalamityPlayerCharacterBodyComponent>(body.Value);
+        MarkPlayerCharacterBody(body.Value);
         _mobState.ChangeMobState(body.Value, MobState.Dead, mobState);
         StartPlayerCorpseTimer(body.Value);
         Log.Info($"Abandoned persistent character for account {accountId}; corpse {ToPrettyString(body.Value)} will despawn after its player corpse timer.");
@@ -400,7 +403,13 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     private void OnMindAddedToBody(EntityUid uid, MindContainerComponent component, MindAddedMessage ev)
     {
         if (ev.Mind.Comp.UserId != null)
-            EnsureComp<CalamityPlayerCharacterBodyComponent>(uid);
+            MarkPlayerCharacterBody(uid);
+    }
+
+    private void MarkPlayerCharacterBody(EntityUid body)
+    {
+        EnsureComp<CalamityPlayerCharacterBodyComponent>(body);
+        _rotting.SetRotAfter(body, PlayerCorpseReviveWindow);
     }
 
     private void OnMobStateChanged(MobStateChangedEvent ev)

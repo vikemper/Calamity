@@ -17,6 +17,22 @@ public sealed partial class RottingSystem : SharedRottingSystem
     [Dependency] private ContainerSystem _container = default!;
     [Dependency] private DamageableSystem _damageable = default!;
 
+    /// <summary>
+    /// Sets how long this entity can perish before the regular rotting state begins.
+    /// </summary>
+    public void SetRotAfter(EntityUid uid, TimeSpan duration)
+    {
+        if (!TryComp(uid, out PerishableComponent? perishable))
+        {
+            perishable = AddComp<PerishableComponent>(uid);
+            perishable.RotNextUpdate = _timing.CurTime + perishable.PerishUpdateRate;
+        }
+
+        perishable.RotAfter = duration;
+        perishable.Stage = PerishStage((uid, perishable), MaxStages);
+        Dirty(uid, perishable);
+    }
+
     public override void Initialize()
     {
         base.Initialize();
