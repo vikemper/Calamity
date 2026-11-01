@@ -82,6 +82,9 @@ public sealed partial class CryoSleepSystem
                 return ReturnToBodyStatus.Occupied;
         }
 
+        if (TryComp<CryoStoredBodyComponent>(body, out var storedBodyComponent))
+            RestoreBodyDespawnAfterCryosleep(body, storedBodyComponent);
+
         _storedBodies.Remove(id.Value);
         _mind.ControlMob(id.Value, body);
         // Force the mob to sleep
@@ -103,11 +106,25 @@ public sealed partial class CryoSleepSystem
     public void ResetCryosleepState(NetUserId id)
     {
         var body = _storedBodies.GetValueOrDefault(id, null);
+        if (body == null)
+            return;
 
-        if (body != null && _storedBodies.Remove(id) && Transform(body!.Value.Body).ParentUid == _storageMap)
+        _storedBodies.Remove(id);
+        var bodyUid = body.Value.Body;
+        if (Deleted(bodyUid))
+            return;
+
+        // The cryostorage map is an in-memory map and its UID changes after a world restore.
+        // The component is the durable signal that this entity is still an abandoned cryo body.
+        if (TryComp<CryoStoredBodyComponent>(bodyUid, out var storedBodyComponent) &&
+            storedBodyComponent.UserId == id)
         {
-            QueueDel(body.Value.Body);
+            QueueDel(bodyUid);
+            return;
         }
+
+        if (_storageMap is { } storageMap && Transform(bodyUid).ParentUid == storageMap)
+            QueueDel(bodyUid);
     }
 
     public bool HasCryosleepingBody(NetUserId id)

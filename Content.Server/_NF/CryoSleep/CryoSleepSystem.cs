@@ -37,7 +37,7 @@ using Robust.Shared.Enums;
 using Robust.Shared.Map;
 using Robust.Shared.Network;
 using Robust.Shared.Prototypes;
-using Robust.Shared.Timing;
+using Robust.Shared.Spawners;
 using Content.Server.Ghost;
 using Content.Shared.Roles;
 using Content.Server._NF.Shuttles.Components;
@@ -85,6 +85,8 @@ public sealed partial class CryoSleepSystem : SharedCryoSleepSystem
         SubscribeLocalEvent<CryoSleepComponent, DestructionEventArgs>((e,c,_) => EjectBody(e, c));
         SubscribeLocalEvent<CryoSleepComponent, CryoStoreDoAfterEvent>(OnAutoCryoSleep);
         SubscribeLocalEvent<CryoSleepComponent, DragDropTargetEvent>(OnEntityDragDropped);
+        SubscribeLocalEvent<CryoStoredBodyComponent, ComponentShutdown>(OnStoredBodyShutdown);
+        SubscribeLocalEvent<PostGameMapLoad>(OnPostGameMapLoad);
         SubscribeLocalEvent<RoundEndedEvent>(OnRoundEnded);
         SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawnComplete);
         SubscribeLocalEvent<RoleAddedEvent>(OnRoleAdded);
@@ -389,6 +391,21 @@ public sealed partial class CryoSleepSystem : SharedCryoSleepSystem
         bodyTransform.Coordinates = new EntityCoordinates(storage, _cryoCoords); // Mono, replaced Vector.Zero with _cryoCoords. Sets body to this location on cryomap.
         _cryoCoords = Vector2.Add(_cryoCoords, _cryoDistance); // Mono - Increments for next body.
 
+        var hadPreviousTimedDespawn = TryComp(bodyId, out TimedDespawnComponent? previousDespawn);
+        var previousLifetime = hadPreviousTimedDespawn ? previousDespawn!.Lifetime : 0f;
+        var cryoExpiration = Math.Max(0f, _configurationManager.GetCVar(NFCCVars.CryoExpirationTime));
+        var timerLifetime = hadPreviousTimedDespawn
+            ? Math.Min(previousLifetime, cryoExpiration)
+            : cryoExpiration;
+
+        var storedBody = EnsureComp<CryoStoredBodyComponent>(bodyId);
+        storedBody.UserId = id;
+        storedBody.Cryopod = cryopod;
+        storedBody.HadPreviousTimedDespawn = hadPreviousTimedDespawn;
+        storedBody.PreviousTimedDespawnLifetime = previousLifetime;
+        storedBody.TimedDespawnLifetimeAtStorage = timerLifetime;
+        EnsureComp<TimedDespawnComponent>(bodyId).Lifetime = timerLifetime;
+
         RaiseLocalEvent(bodyId, new CryosleepEnterEvent(cryopod, mind?.UserId), true);
 
         if (cryo.CryosleepDoAfter != null && _doAfter.GetStatus(cryo.CryosleepDoAfter) == DoAfterStatus.Running)
@@ -476,15 +493,57 @@ public sealed partial class CryoSleepSystem : SharedCryoSleepSystem
         _radioSystem.SendRadioMessage(cryopod, message, radioComp.RadioChannel, cryopod);
         // Mono end
 
-        // Start a timer. When it ends, the body needs to be deleted.
-        Timer.Spawn(TimeSpan.FromSeconds(_configurationManager.GetCVar(NFCCVars.CryoExpirationTime)), () =>
-        {
-            if (id != null)
-                ResetCryosleepState(id.Value);
+    }
 
-            if (!Deleted(bodyId) && Transform(bodyId).ParentUid == _storageMap)
-                QueueDel(bodyId);
-        });
+    private void OnStoredBodyShutdown(EntityUid uid, CryoStoredBodyComponent component, ComponentShutdown args)
+    {
+        if (component.UserId is not { } userId ||
+            !_storedBodies.TryGetValue(userId, out var storedBody) ||
+            storedBody is not { } stored ||
+            stored.Body != uid)
+        {
+            return;
+        }
+
+        _storedBodies.Remove(userId);
+    }
+
+    private void OnPostGameMapLoad(PostGameMapLoad ev)
+    {
+        if (!ev.Restored)
+            return;
+
+        _storedBodies.Clear();
+        var query = EntityQueryEnumerator<CryoStoredBodyComponent>();
+        while (query.MoveNext(out var body, out var storedBody))
+        {
+            if (storedBody.UserId is not { } userId)
+                continue;
+
+            _storedBodies[userId] = new StoredBody
+            {
+                Body = body,
+                Cryopod = storedBody.Cryopod,
+            };
+        }
+    }
+
+    private void RestoreBodyDespawnAfterCryosleep(EntityUid body, CryoStoredBodyComponent storedBody)
+    {
+        if (storedBody.HadPreviousTimedDespawn)
+        {
+            if (TryComp(body, out TimedDespawnComponent? despawn))
+            {
+                var elapsedWhileStored = Math.Max(0f, storedBody.TimedDespawnLifetimeAtStorage - despawn.Lifetime);
+                despawn.Lifetime = Math.Max(0f, storedBody.PreviousTimedDespawnLifetime - elapsedWhileStored);
+            }
+        }
+        else
+        {
+            RemComp<TimedDespawnComponent>(body);
+        }
+
+        RemComp<CryoStoredBodyComponent>(body);
     }
 
     /// <param name="body">If not null, will not eject if the stored body is different from that parameter.</param>
