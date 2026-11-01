@@ -122,6 +122,13 @@ namespace Content.Server.GameTicking
             if (restoreMap != null && _worldPersistence.TryLoadSavedWorldMap(restoreMap, out var restoredMapId, out _))
             {
                 DefaultMap = restoredMapId;
+                if (_map.TryGetMap(restoredMapId, out var restoredMapEntity) && restoredMapEntity != null &&
+                    TryComp(restoredMapEntity.Value, out CalamityPersistentMapComponent? persistentMap) &&
+                    !string.IsNullOrWhiteSpace(persistentMap.GameMapPrototype))
+                {
+                    _gameMapManager.SelectMap(persistentMap.GameMapPrototype);
+                }
+
                 if (_worldPersistence.RestoredFullWorldSnapshotThisBoot)
                     CurrentPreset = Preset;
                 else
@@ -184,7 +191,7 @@ namespace Content.Server.GameTicking
                 if (i == 0)
                 {
                     DefaultMap = mapId;
-                    _worldPersistence.SetWorldMap(mapId);
+                    _worldPersistence.SetWorldMap(mapId, maps[i]);
                 }
             }
         }

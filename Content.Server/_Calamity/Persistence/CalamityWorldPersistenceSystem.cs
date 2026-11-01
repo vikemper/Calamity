@@ -42,6 +42,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     [Dependency] private IGameTiming _timing = default!;
     [Dependency] private MapLoaderSystem _mapLoader = default!;
     [Dependency] private MetaDataSystem _metadata = default!;
+    [Dependency] private IPrototypeManager _prototypeManager = default!;
 
     private MapId? _worldMap;
     private TimeSpan _nextSaveAt;
@@ -95,10 +96,10 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     /// <summary>
     /// Called by GameTicker for the selected main map after normal loading, or when this system restores it.
     /// </summary>
-    public void SetWorldMap(MapId mapId)
+    public void SetWorldMap(MapId mapId, GameMapPrototype? prototype = null)
     {
         _worldMap = mapId;
-        RegisterPersistentMap(MainMapKey, mapId);
+        RegisterPersistentMap(MainMapKey, mapId, prototype?.ID);
         _nextSaveAt = _timing.RealTime + GetSaveInterval();
     }
 
@@ -106,7 +107,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     /// Registers a world map under an identifier that remains stable across server restarts.
     /// Sector systems can use coordinates in place of runtime MapIds.
     /// </summary>
-    public void RegisterPersistentMap(string key, MapId mapId)
+    public void RegisterPersistentMap(string key, MapId mapId, string? gameMapPrototype = null)
     {
         if (string.IsNullOrWhiteSpace(key) || key.Any(character =>
                 !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
@@ -119,6 +120,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
         var persistentMap = EnsureComp<CalamityPersistentMapComponent>(mapUid.Value);
         persistentMap.Key = key;
+        if (gameMapPrototype != null)
+            persistentMap.GameMapPrototype = gameMapPrototype;
     }
 
     /// <summary>
@@ -171,6 +174,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 }
 
                 var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
+                var restoredPrototype = prototype;
                 MapId restoredMapId;
                 IReadOnlyList<EntityUid> restoredGrids;
 
@@ -194,6 +198,12 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                         }
 
                         mainMap = candidate;
+                        if (!string.IsNullOrWhiteSpace(persistentMap.GameMapPrototype) &&
+                            _prototypeManager.TryIndex<GameMapPrototype>(persistentMap.GameMapPrototype, out var savedPrototype))
+                        {
+                            restoredPrototype = savedPrototype;
+                        }
+
                         break;
                     }
 
@@ -221,19 +231,24 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
                     restoredMapId = map.Value.Comp.MapId;
                     restoredGrids = loadedGrids.Select(grid => grid.Owner).ToArray();
-                    _metadata.SetEntityName(map.Value.Owner, prototype.MapName);
+                    if (TryComp(map.Value.Owner, out CalamityPersistentMapComponent? persistentMap) &&
+                        !string.IsNullOrWhiteSpace(persistentMap.GameMapPrototype) &&
+                        _prototypeManager.TryIndex<GameMapPrototype>(persistentMap.GameMapPrototype, out var savedPrototype))
+                    {
+                        restoredPrototype = savedPrototype;
+                    }
                 }
 
                 mapId = restoredMapId;
                 grids = restoredGrids;
                 if (_mapSystem.TryGetMap(mapId, out var restoredMapEntity) && restoredMapEntity != null)
-                    _metadata.SetEntityName(restoredMapEntity.Value, prototype.MapName);
+                    _metadata.SetEntityName(restoredMapEntity.Value, restoredPrototype.MapName);
 
                 RestoreLoadedPlayerMindData();
-                RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null, restored: true));
+                RaiseLocalEvent(new PostGameMapLoad(restoredPrototype, mapId, grids, null, restored: true));
                 RestoredSavedWorldMapThisBoot = true;
                 RestoredFullWorldSnapshotThisBoot = snapshotName.EndsWith("-universe.yml", StringComparison.Ordinal);
-                SetWorldMap(mapId);
+                SetWorldMap(mapId, restoredPrototype);
                 Log.Info($"Restored world map from snapshot {snapshotPath}.");
                 return true;
             }
