@@ -18,6 +18,7 @@ namespace Content.Server.Preferences.Managers
         bool TryGetCachedPreferences(NetUserId userId, [NotNullWhen(true)] out PlayerPreferences? playerPreferences);
         PlayerPreferences GetPreferences(NetUserId userId);
         PlayerPreferences? GetPreferencesOrNull(NetUserId? userId);
+        bool TryGetCachedCharacterProfileId(NetUserId userId, int slot, out int profileId);
         IEnumerable<KeyValuePair<NetUserId, ICharacterProfile>> GetSelectedProfilesForPlayers(List<NetUserId> userIds);
         bool HavePreferencesLoaded(ICommonSession session);
         Task RefreshPreferencesAsync(ICommonSession session, CancellationToken cancel);

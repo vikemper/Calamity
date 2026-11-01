@@ -73,6 +73,17 @@ namespace Content.Server.Database
             return new PlayerPreferences(profiles, prefs.SelectedCharacterSlot, Color.FromHex(prefs.AdminOOCColor));
         }
 
+        public async Task<IReadOnlyDictionary<int, int>> GetCharacterProfileIdsAsync(
+            NetUserId userId,
+            CancellationToken cancel = default)
+        {
+            await using var db = await GetDb(cancel);
+
+            return await db.DbContext.Profile
+                .Where(profile => profile.Preference.UserId == userId.UserId)
+                .ToDictionaryAsync(profile => profile.Slot, profile => profile.Id, cancel);
+        }
+
         public async Task SaveSelectedCharacterIndexAsync(NetUserId userId, int index)
         {
             await using var db = await GetDb();

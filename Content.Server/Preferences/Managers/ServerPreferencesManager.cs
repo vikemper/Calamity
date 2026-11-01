@@ -133,7 +133,11 @@ namespace Content.Server.Preferences.Managers
             RaiseCharacterSelectionChanged(userId, previousIndex, slot);
 
             if (ShouldStorePrefs(session.Channel.AuthType))
+            {
                 await _db.SaveCharacterSlotAsync(userId, profile, slot);
+                prefsData.CharacterProfileIds = new Dictionary<int, int>(
+                    await _db.GetCharacterProfileIdsAsync(userId));
+            }
         }
 
         private async void HandleDeleteCharacterMessage(MsgDeleteCharacter message)
@@ -187,6 +191,8 @@ namespace Content.Server.Preferences.Managers
                 {
                     await _db.SaveCharacterSlotAsync(userId, null, slot);
                 }
+
+                prefsData.CharacterProfileIds.Remove(slot);
             }
         }
 
@@ -227,6 +233,8 @@ namespace Content.Server.Preferences.Managers
                 {
                     var prefs = await GetOrCreatePreferencesAsync(session.UserId, cancel);
                     prefsData.Prefs = prefs;
+                    prefsData.CharacterProfileIds = new Dictionary<int, int>(
+                        await _db.GetCharacterProfileIdsAsync(session.UserId, cancel));
                 }
             }
         }
@@ -312,6 +320,14 @@ namespace Content.Server.Preferences.Managers
             return null;
         }
 
+        public bool TryGetCachedCharacterProfileId(NetUserId userId, int slot, out int profileId)
+        {
+            profileId = default;
+            return _cachedPlayerPrefs.TryGetValue(userId, out var prefsData) &&
+                   prefsData.PrefsLoaded &&
+                   prefsData.CharacterProfileIds.TryGetValue(slot, out profileId);
+        }
+
         private async Task<PlayerPreferences> GetOrCreatePreferencesAsync(NetUserId userId, CancellationToken cancel)
         {
             var prefs = await _db.GetPlayerPreferencesAsync(userId, cancel);
@@ -341,6 +357,8 @@ namespace Content.Server.Preferences.Managers
                 if (prefs != null)
                 {
                     prefsData.Prefs = prefs;
+                    prefsData.CharacterProfileIds = new Dictionary<int, int>(
+                        await _db.GetCharacterProfileIdsAsync(session.UserId, cancel));
                     prefsData.PrefsLoaded = true;
 
                     var msg = new MsgPreferencesAndSettings
@@ -387,6 +405,7 @@ namespace Content.Server.Preferences.Managers
         {
             public bool PrefsLoaded;
             public PlayerPreferences? Prefs;
+            public Dictionary<int, int> CharacterProfileIds = new();
         }
 
         void IPostInjectInit.PostInject()

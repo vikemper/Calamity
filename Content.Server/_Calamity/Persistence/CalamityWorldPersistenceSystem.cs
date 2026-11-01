@@ -4,7 +4,6 @@ using System.Linq;
 using Content.Server.Atmos.Rotting;
 using Content.Server.Chat.Managers;
 using Content.Server.GameTicking;
-using Content.Server.Preferences.Managers;
 using Content.Shared._Calamity.CCVar;
 using Content.Shared.Chat;
 using Content.Shared.GameTicking;
@@ -14,7 +13,6 @@ using Content.Shared.Mobs.Systems;
 using Content.Shared.Mind;
 using Content.Shared.Mind.Components;
 using Content.Shared.Maps;
-using Content.Shared.Preferences;
 using Robust.Server;
 using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
@@ -45,7 +43,6 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     [Dependency] private IBaseServer _baseServer = default!;
     [Dependency] private IConfigurationManager _configuration = default!;
     [Dependency] private IChatManager _chatManager = default!;
-    [Dependency] private IServerPreferencesManager _preferencesManager = default!;
     [Dependency] private SharedMindSystem _mindSystem = default!;
     [Dependency] private MobStateSystem _mobState = default!;
     [Dependency] private RottingSystem _rotting = default!;
@@ -75,36 +72,12 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     /// </summary>
     public bool RestoredFullWorldSnapshotThisBoot { get; private set; }
 
-    /// <summary>
-    /// Checks whether a restored mind still belongs to the character slot currently selected by its account.
-    /// A mismatch permanently abandons the old body and lets the player spawn as the newly selected character.
-    /// </summary>
-    public bool MatchesSelectedCharacter(NetUserId userId, EntityUid mindId, MindComponent mind)
-    {
-        if (!_preferencesManager.TryGetCachedPreferences(userId, out var preferences) || preferences == null)
-            return true;
-
-        if (!TryComp(mindId, out CalamityPersistentCharacterComponent? persistentCharacter))
-        {
-            persistentCharacter = AddComp<CalamityPersistentCharacterComponent>(mindId);
-            persistentCharacter.CharacterSlot = FindLegacyCharacterSlot(preferences, mind.CharacterName)
-                                                ?? preferences.SelectedCharacterIndex;
-        }
-
-        if (persistentCharacter.CharacterSlot == preferences.SelectedCharacterIndex)
-            return true;
-
-        AbandonCharacter(mindId, mind);
-        return false;
-    }
-
     public override void Initialize()
     {
         base.Initialize();
         _baseServer.ShutdownRequested += OnShutdownRequested;
         SubscribeLocalEvent<GameRunLevelChangedEvent>(OnGameRunLevelChanged);
         SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawnComplete);
-        SubscribeLocalEvent<PlayerSelectedCharacterChangedEvent>(OnPlayerSelectedCharacterChanged);
         SubscribeLocalEvent<MindContainerComponent, MindAddedMessage>(OnMindAddedToBody);
         SubscribeLocalEvent<MobStateChangedEvent>(OnMobStateChanged);
     }
@@ -341,46 +314,12 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         }
     }
 
-    private int? FindLegacyCharacterSlot(PlayerPreferences preferences, string? characterName)
-    {
-        if (string.IsNullOrWhiteSpace(characterName))
-            return null;
-
-        var matches = preferences.Characters
-            .Where(pair => pair.Value is HumanoidCharacterProfile profile && profile.Name == characterName)
-            .Select(pair => pair.Key)
-            .ToArray();
-
-        return matches.Length == 1 ? matches[0] : null;
-    }
-
     private void OnPlayerSpawnComplete(PlayerSpawnCompleteEvent ev)
     {
         MarkPlayerCharacterBody(ev.Mob);
-
-        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
-            !_preferencesManager.TryGetCachedPreferences(ev.Player.UserId, out var preferences) || preferences == null ||
-            !_mindSystem.TryGetMind(ev.Player.UserId, out var mindId, out _) || mindId == null)
-            return;
-
-        var persistentCharacter = EnsureComp<CalamityPersistentCharacterComponent>(mindId.Value);
-        persistentCharacter.CharacterSlot = preferences.SelectedCharacterIndex;
     }
 
-    private void OnPlayerSelectedCharacterChanged(PlayerSelectedCharacterChangedEvent ev)
-    {
-        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
-            !_mindSystem.TryGetMind(ev.UserId, out var mindId, out var mind) || mindId == null || mind == null ||
-            !TryComp(mindId.Value, out CalamityPersistentCharacterComponent? persistentCharacter) ||
-            persistentCharacter.CharacterSlot == ev.SelectedCharacterSlot)
-        {
-            return;
-        }
-
-        AbandonCharacter(mindId.Value, mind);
-    }
-
-    private void AbandonCharacter(EntityUid mindId, MindComponent mind)
+    public void AbandonCharacter(EntityUid mindId, MindComponent mind)
     {
         var accountId = mind.UserId;
         var body = mind.LastMob;

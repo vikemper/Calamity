@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
+using Content.Server._Calamity.Persistence;
 using Content.Server._Battlefield14.FactionTracking;
 using Content.Server.Administration.Managers;
 using Content.Server.Administration.Systems;
@@ -30,6 +31,7 @@ namespace Content.Server.GameTicking
     public sealed partial class GameTicker
     {
         [Dependency] private IAdminManager _adminManager = default!;
+        [Dependency] private CalamityCharacterIdentitySystem _characterIdentity = default!;
         [Dependency] private SharedJobSystem _jobs = default!;
         [Dependency] private AdminSystem _admin = default!;
         [Dependency] private RespawnSystem _respawn = default!; // Frontier
@@ -155,7 +157,7 @@ namespace Content.Server.GameTicking
                 return false;
             }
 
-            if (!_worldPersistence.MatchesSelectedCharacter(player.UserId, mindId.Value, mind))
+            if (!_characterIdentity.MatchesSelectedCharacter(player.UserId, mindId.Value, mind))
                 return false;
 
             if (mind.CurrentEntity is not { } entity ||
