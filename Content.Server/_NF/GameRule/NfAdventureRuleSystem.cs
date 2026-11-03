@@ -13,6 +13,7 @@ using Content.Server.Cargo.Components;
 using Content.Server.GameTicking;
 using Content.Server.GameTicking.Presets;
 using Content.Server.GameTicking.Rules;
+using Content.Shared._Calamity.CCVar;
 using Content.Shared._NF.Bank;
 using Content.Shared._NF.CCVar;
 using Content.Shared.GameTicking;
@@ -359,6 +360,13 @@ public sealed partial class NFAdventureRuleSystem : GameRuleSystem<NFAdventureRu
         {
             // The map already contains its generated points of interest. Recreate the game-rule state
             // without spawning another copy of the world content or firing its generation event again.
+            base.Started(uid, component, gameRule, args);
+            return;
+        }
+
+        if (_cfg.GetCVar(CalamityCCVars.WorldPersistenceEnabled))
+        {
+            // Persistent sector worlds start with only the primary map; sectors are generated on travel.
             base.Started(uid, component, gameRule, args);
             return;
         }

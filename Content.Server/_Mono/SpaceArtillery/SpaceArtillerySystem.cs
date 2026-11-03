@@ -1,6 +1,7 @@
 using System.Numerics;
 using Content.Server._Mono.AmmoLoader;
 using Content.Server._Mono.FireControl;
+using Content.Server._Calamity.Persistence;
 using Content.Server.Power.Components;
 using Content.Shared.DeviceLinking.Events;
 using Content.Server.DeviceLinking.Systems;
@@ -114,7 +115,9 @@ public sealed partial class SpaceArtillerySystem : EntitySystem
         }
 
         var parentGrid = xform.GridUid;
-        if (HasComp<SpaceArtilleryDisabledGridComponent>(parentGrid) || !xform.Anchored)
+        if (HasComp<SpaceArtilleryDisabledGridComponent>(parentGrid) ||
+            xform.MapUid is { } mapUid && HasComp<CalamitySafeSectorComponent>(mapUid) ||
+            !xform.Anchored)
         {
             return;
         }

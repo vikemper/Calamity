@@ -24,6 +24,12 @@ public sealed class CalamityCCVars
         CVarDef.Create("calamity.persistence.interval", 1200f, CVar.SERVERONLY);
 
     /// <summary>
+    /// Width and height of a sector map in map units.
+    /// </summary>
+    public static readonly CVarDef<float> SectorSize =
+        CVarDef.Create("calamity.sectors.size", 4096f, CVar.SERVERONLY);
+
+    /// <summary>
     /// How long a player character's corpse remains before despawning, in seconds.
     /// </summary>
     public static readonly CVarDef<float> AbandonedCharacterCorpseLifetime =

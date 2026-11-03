@@ -158,11 +158,12 @@ namespace Content.Server.Entry
 
                 _euiManager.Initialize();
 
-                IoCManager.Resolve<CompanyManager>().Initialize(); // Mono
                 IoCManager.Resolve<MonoCoinsManager>().Initialize(); // Mono
                 IoCManager.Resolve<IGameMapManager>().Initialize();
-                IoCManager.Resolve<CalamityWorldPersistenceSystem>().RestoreLatestRuntimeContent();
-                IoCManager.Resolve<IEntitySystemManager>().GetEntitySystem<GameTicker>().PostInitialize();
+                var entitySystems = IoCManager.Resolve<IEntitySystemManager>();
+                entitySystems.GetEntitySystem<CalamityWorldPersistenceSystem>().RestoreLatestRuntimeContent();
+                IoCManager.Resolve<CompanyManager>().Initialize(); // Mono
+                entitySystems.GetEntitySystem<GameTicker>().PostInitialize();
                 IoCManager.Resolve<IBanManager>().Initialize();
                 IoCManager.Resolve<IConnectionManager>().PostInit();
                 IoCManager.Resolve<MultiServerKickManager>().Initialize();

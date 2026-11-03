@@ -1,0 +1,43 @@
+- type: entity
+  parent: BaseComputer
+  id: CalamityPersonalShipTerminal
+  name: console de hangar pessoal
+  description: Vincula uma nave a um cartão de identificação permanente e permite guardá-la ou recuperá-la em uma doca disponível.
+  components:
+  - type: Sprite
+    sprite: _NF/Structures/Machines/computers.rsi
+    layers:
+    - map: ["computerLayerBody"]
+      state: computer
+    - map: ["computerLayerKeyboard"]
+      state: generic_keyboard
+    - map: ["computerLayerScreen"]
+      state: shipyard
+    - map: ["computerLayerKeys"]
+      state: telesci_key
+    - map: ["enum.WiresVisualLayers.MaintenancePanel"]
+      state: generic_panel_open
+  - type: CalamityPersonalShipTerminal
+  - type: ItemSlots
+    slots:
+      calamity-personal-id:
+        name: calamity-personal-ship-id-slot-name
+        insertSound:
+          path: /Audio/Machines/id_insert.ogg
+        ejectSound:
+          path: /Audio/Machines/id_swipe.ogg
+        whitelist:
+          components:
+          - IdCard
+        swap: false
+  - type: ContainerContainer
+    containers:
+      board: !type:Container
+        ents: []
+      calamity-personal-id: !type:ContainerSlot {}
+  - type: ActivatableUI
+    key: enum.CalamityPersonalShipConsoleUiKey.Key
+  - type: UserInterface
+    interfaces:
+      enum.CalamityPersonalShipConsoleUiKey.Key:
+        type: CalamityPersonalShipConsoleBoundUserInterface

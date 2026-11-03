@@ -2,6 +2,7 @@
               HorizontalExpand="True"
               xmlns:controls="https://spacestation14.io"
               xmlns:ui="clr-namespace:Content.Client.Shuttles.UI"
+              xmlns:gunnery="clr-namespace:Content.Client._Mono.FireControl.UI"
               xmlns:controls1="clr-namespace:Content.Client.UserInterface.Controls"
               xmlns:graphics="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client">
                 <!-- Mono - wrap -->
@@ -11,6 +12,12 @@
                                      VerticalAlignment="Stretch"
                                      VerticalExpand="True"
                                      HorizontalExpand="True"/>
+                    <gunnery:FireControlNavControl Name="FireControlRadar"
+                                     MouseFilter="Stop"
+                                     VerticalAlignment="Stretch"
+                                     VerticalExpand="True"
+                                     HorizontalExpand="True"
+                                     Visible="False"/>
                 </controls:LayoutContainer>
                 <!-- Nav controls -->
                 <controls:PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="4 4 4 4">
@@ -111,6 +118,41 @@
                                FontColorOverride="#00ff2a"
                                Visible="False"/>
                     </controls:GridContainer>
+                    <controls:PanelContainer Name="ShipControlPanel" Visible="False" VerticalExpand="True" HorizontalExpand="True" Margin="4 4 4 4">
+                        <controls:PanelContainer.PanelOverride>
+                            <graphics:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#181818"/>
+                        </controls:PanelContainer.PanelOverride>
+                        <controls:BoxContainer Orientation="Vertical" Margin="4">
+                            <controls:Label Name="FireControlStatus" Text="{controls:Loc 'calamity-ship-console-weapons-disconnected'}"/>
+                            <controls:Button Name="RefreshWeapons" Text="{controls:Loc 'calamity-ship-console-weapons-refresh'}" HorizontalExpand="True"/>
+                            <controls:BoxContainer Orientation="Horizontal">
+                                <controls:Button Name="SelectAllWeapons" Text="{controls:Loc 'gunnery-select-all'}" HorizontalExpand="True"/>
+                                <controls:Button Name="UnselectAllWeapons" Text="{controls:Loc 'gunnery-unselect-all'}" HorizontalExpand="True"/>
+                            </controls:BoxContainer>
+                            <controls:BoxContainer Orientation="Horizontal">
+                                <controls:Button Name="SelectBallisticWeapons" Text="{controls:Loc 'calamity-ship-console-weapons-ballistic'}" HorizontalExpand="True"/>
+                                <controls:Button Name="SelectEnergyWeapons" Text="{controls:Loc 'calamity-ship-console-weapons-energy'}" HorizontalExpand="True"/>
+                                <controls:Button Name="SelectMissileWeapons" Text="{controls:Loc 'calamity-ship-console-weapons-missile'}" HorizontalExpand="True"/>
+                            </controls:BoxContainer>
+                            <controls:ScrollContainer VerticalExpand="True" HScrollEnabled="False">
+                                <controls:BoxContainer Name="WeaponsList" Orientation="Vertical" HorizontalExpand="True"/>
+                            </controls:ScrollContainer>
+                        </controls:BoxContainer>
+                    </controls:PanelContainer>
+                    <controls:PanelContainer Name="SectorCrossingPanel" Visible="False" VerticalExpand="False" HorizontalExpand="True" Margin="4 4 4 4">
+                        <controls:PanelContainer.PanelOverride>
+                            <graphics:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#181818"/>
+                        </controls:PanelContainer.PanelOverride>
+                        <controls:BoxContainer Orientation="Vertical" Margin="4">
+                            <controls:Label Text="{controls:Loc 'calamity-ship-console-sector-crossing'}" HorizontalAlignment="Center"/>
+                            <controls:GridContainer Columns="2">
+                                <controls:Button Name="CrossNorth" Text="{controls:Loc 'calamity-ship-console-north'}" HorizontalExpand="True"/>
+                                <controls:Button Name="CrossEast" Text="{controls:Loc 'calamity-ship-console-east'}" HorizontalExpand="True"/>
+                                <controls:Button Name="CrossSouth" Text="{controls:Loc 'calamity-ship-console-south'}" HorizontalExpand="True"/>
+                                <controls:Button Name="CrossWest" Text="{controls:Loc 'calamity-ship-console-west'}" HorizontalExpand="True"/>
+                            </controls:GridContainer>
+                        </controls:BoxContainer>
+                    </controls:PanelContainer>
                     </controls:PanelContainer>
                     </controls:PanelContainer>
                     <controls1:StripeBack
@@ -299,4 +341,3 @@
                     </controls:PanelContainer>
                 </controls:PanelContainer>
                 </controls:BoxContainer>
-

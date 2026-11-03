@@ -1,6 +1,8 @@
 using Content.Client.Shuttles.UI;
 using Content.Shared.Shuttles.BUIStates;
 using Content.Shared.Shuttles.Events;
+using Content.Shared._Calamity.Ships;
+using Content.Shared._Mono.FireControl;
 using JetBrains.Annotations;
 using Robust.Client.UserInterface;
 using Robust.Shared.Log;
@@ -33,6 +35,12 @@ public sealed partial class ShuttleConsoleBoundUserInterface : BoundUserInterfac
         _window.UndockRequest += OnUndockRequest;
         _window.UndockAllRequest += OnUndockAllRequest;
         _window.ToggleFTLLockRequest += OnToggleFTLLockRequest;
+        _window.SectorCrossingRequested += direction =>
+            SendMessage(new CalamitySectorCrossingMessage(direction));
+        _window.FireControlRequested += (weapons, coordinates) =>
+            SendMessage(new FireControlConsoleFireMessage(weapons, coordinates));
+        _window.FireControlRefreshRequested += () =>
+            SendMessage(new FireControlConsoleRefreshServerMessage());
         NfOpen(); // Frontier
     }
 

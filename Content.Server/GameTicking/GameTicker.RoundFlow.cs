@@ -110,6 +110,12 @@ namespace Content.Server.GameTicking
             if (_map.MapExists(DefaultMap))
                 return;
 
+            if (_cfg.GetCVar(CalamityCCVars.WorldPersistenceEnabled))
+            {
+                _cfg.SetCVar(CCVars.GameMap, CalamityWorldPersistenceSystem.MainGameMapPrototypeId);
+                _sawmill.Info($"Persistent world startup selected main map '{CalamityWorldPersistenceSystem.MainGameMapPrototypeId}' (Colossus Central).");
+            }
+
             // Try restoring before adding the selected preset's rules. A complete world snapshot already
             // contains its running rule entities, so adding fresh copies here would duplicate them.
             var restoreMap = _gameMapManager.GetSelectedMap();

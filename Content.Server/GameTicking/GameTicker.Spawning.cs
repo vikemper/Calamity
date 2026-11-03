@@ -10,6 +10,7 @@ using Content.Server.Ghost;
 using Content.Server.Spawners.Components;
 using Content.Server.Speech.Components;
 using Content.Server.Station.Components;
+using Content.Shared.Station.Components;
 using Content.Shared.Database;
 using Content.Shared.GameTicking;
 using Content.Shared.Mind;
@@ -54,9 +55,19 @@ namespace Content.Server.GameTicking
         private List<EntityUid> GetSpawnableStations()
         {
             var spawnableStations = new List<EntityUid>();
+            var worldMap = _worldPersistence.WorldMapId;
             var query = EntityQueryEnumerator<StationJobsComponent, StationSpawningComponent>();
             while (query.MoveNext(out var uid, out _, out _))
             {
+                if (worldMap is { } mapId)
+                {
+                    if (!TryComp<StationDataComponent>(uid, out var stationData) ||
+                        !stationData.Grids.Any(grid => Transform(grid).MapID == mapId))
+                    {
+                        continue;
+                    }
+                }
+
                 spawnableStations.Add(uid);
             }
 

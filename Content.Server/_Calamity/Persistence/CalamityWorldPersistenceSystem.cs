@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using Content.Server.Atmos.Rotting;
 using Content.Server.Chat.Managers;
+using Content.Server.Database;
 using Content.Server.GameTicking;
 using Content.Shared._Calamity.CCVar;
 using Content.Shared.Chat;
@@ -32,17 +33,22 @@ using Robust.Shared.Utility;
 namespace Content.Server._Calamity.Persistence;
 
 /// <summary>
-/// Saves and restores server entity state using committed, versioned snapshots.
-/// Sector-specific identity and navigation will be added separately.
+/// Saves server entity state using committed, versioned snapshots. On restore, only the registered
+/// primary map is retained; secondary maps from older global snapshots are discarded.
 /// </summary>
 public sealed class CalamityWorldPersistenceSystem : EntitySystem
 {
+    public const string MainGameMapPrototypeId = "Frontier";
+
     private const string SnapshotDirectoryName = "Calamity/Persistence";
     private const string SnapshotAssetDirectorySuffix = "-assets";
     private const string SnapshotAssetManifestName = "complete";
     private const string SnapshotResourceDirectoryName = "resources";
     private const string SnapshotPrototypeDirectoryName = "prototypes";
-    private const string SnapshotAssetManifestVersion = "runtime-content-v1";
+    private const string SnapshotDatabaseStateName = "database-state.json";
+    private const string PreviousSnapshotAssetManifestVersion = "runtime-content-v1";
+    private const string SnapshotAssetManifestVersion = "runtime-content-v2";
+    private const string RestoreSelectionFileName = "restore-next";
     private const string MainMapKey = "main";
     private const int RetainedSnapshots = 2;
     private static readonly TimeSpan PlayerCorpseReviveWindow = TimeSpan.FromMinutes(5);
@@ -61,6 +67,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     [Dependency] private IPrototypeManager _prototypeManager = default!;
     [Dependency] private NetworkResourceManager _networkResourceManager = default!;
     [Dependency] private GamePrototypeLoadManager _prototypeLoadManager = default!;
+    [Dependency] private IServerDbManager _database = default!;
+    [Dependency] private CalamitySectorSystem _sectorSystem = default!;
 
     private MapId? _worldMap;
     private TimeSpan _nextSaveAt;
@@ -82,6 +90,8 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     /// True when the restored snapshot included the server's game rules and auxiliary entities.
     /// </summary>
     public bool RestoredFullWorldSnapshotThisBoot { get; private set; }
+
+    public MapId? WorldMapId => _worldMap;
 
     public override void Initialize()
     {
@@ -116,6 +126,20 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         }
     }
 
+    private bool HasDatabaseRollbackState(IWritableDirProvider directory, int epoch)
+    {
+        var assetPath = GetSnapshotAssetDirectoryPath(epoch);
+        if (!directory.Exists(assetPath))
+            return false;
+
+        var assetDirectory = directory.OpenSubdirectory(assetPath);
+        var manifestPath = new ResPath(SnapshotAssetManifestName).ToRootedPath();
+        var databaseStatePath = new ResPath(SnapshotDatabaseStateName).ToRootedPath();
+        return assetDirectory.Exists(manifestPath) &&
+               ReadText(assetDirectory, manifestPath).Trim() == SnapshotAssetManifestVersion &&
+               assetDirectory.Exists(databaseStatePath);
+    }
+
     /// <summary>
     /// Loads runtime-uploaded resources and prototypes from the newest usable committed snapshot.
     /// EntryPoint calls this before accepting player connections so clients receive the restored content
@@ -134,12 +158,20 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         if (directory == null)
             return;
 
-        foreach (var marker in GetCommittedSnapshots(directory))
+        var requestedRestoreEpoch = GetPendingRestoreEpoch(directory);
+        var committed = GetCommittedSnapshots(directory);
+        var markers = requestedRestoreEpoch is { } requestedEpoch
+            ? committed.Where(marker => GetEpoch(marker) == requestedEpoch).ToArray()
+            : committed;
+
+        if (requestedRestoreEpoch != null && markers.Length == 0)
+            throw new InvalidDataException($"Requested world snapshot {requestedRestoreEpoch} is no longer available.");
+
+        foreach (var marker in markers)
         {
             try
             {
-                var snapshotName = ReadText(directory, marker).Trim();
-                if (!IsSnapshotFileName(snapshotName))
+                if (!TryGetSnapshotName(directory, marker, out var snapshotName))
                 {
                     Log.Error($"Ignoring invalid persistence marker {marker} while restoring uploaded content.");
                     continue;
@@ -149,21 +181,30 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 var assetPath = GetSnapshotAssetDirectoryPath(epoch);
                 if (!directory.Exists(assetPath))
                 {
+                    if (requestedRestoreEpoch != null)
+                        throw new InvalidDataException($"Requested world snapshot {requestedRestoreEpoch} has no runtime or database rollback assets.");
+
                     // Snapshots written before runtime-content support have no asset directory.
                     _runtimeContentSnapshotEpoch = epoch;
                     return;
                 }
 
-                RestoreRuntimeContent(directory, epoch);
+                RestoreRuntimeContent(directory, epoch, requestedRestoreEpoch != null);
                 _runtimeContentSnapshotEpoch = epoch;
                 Log.Info($"Restored runtime-uploaded content from world snapshot {snapshotName}.");
                 return;
             }
             catch (Exception exception)
             {
+                if (requestedRestoreEpoch != null)
+                    throw new InvalidDataException($"Could not restore runtime content for requested world snapshot {requestedRestoreEpoch}.", exception);
+
                 Log.Error($"Failed to restore runtime-uploaded content from snapshot marker {marker}: {exception}; trying the previous committed snapshot.");
             }
         }
+
+        if (requestedRestoreEpoch != null)
+            throw new InvalidDataException($"Could not restore runtime content for requested world snapshot {requestedRestoreEpoch}.");
     }
 
     /// <summary>
@@ -173,6 +214,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
     {
         _worldMap = mapId;
         RegisterPersistentMap(MainMapKey, mapId, prototype?.ID);
+        _sectorSystem.RegisterPrimaryMap(mapId);
         _nextSaveAt = _timing.RealTime + GetSaveInterval();
     }
 
@@ -215,8 +257,78 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         return true;
     }
 
+    public IReadOnlyList<int> GetAvailableSnapshots()
+    {
+        var directory = GetSnapshotDirectory(create: false);
+        if (directory == null)
+            return Array.Empty<int>();
+
+        return GetCommittedSnapshots(directory)
+            .Where(marker => TryGetSnapshotName(directory, marker, out _) &&
+                             HasDatabaseRollbackState(directory, GetEpoch(marker)))
+            .Select(GetEpoch)
+            .ToArray();
+    }
+
     /// <summary>
-    /// Loads the newest valid committed world snapshot. Returns false when there is no usable snapshot.
+    /// Selects a committed snapshot to restore on the next server boot.
+    /// </summary>
+    public bool RequestRestore(int epoch)
+    {
+        if (!_configuration.GetCVar(CalamityCCVars.WorldPersistenceEnabled) ||
+            _saveInProgress ||
+            _queuedSaveReason != null ||
+            epoch <= 0)
+            return false;
+
+        var directory = GetSnapshotDirectory(create: false);
+        if (directory == null)
+            return false;
+
+        var marker = GetCommittedSnapshots(directory)
+            .FirstOrDefault(candidate => GetEpoch(candidate) == epoch);
+        if (marker == default || !TryGetSnapshotName(directory, marker, out var snapshotName))
+            return false;
+
+        var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
+        try
+        {
+            if (!HasDatabaseRollbackState(directory, epoch) || !_mapLoader.TryReadFile(snapshotPath, out _))
+                return false;
+        }
+        catch (Exception exception)
+        {
+            Log.Error($"Could not validate world snapshot {snapshotPath} for restore: {exception}");
+            return false;
+        }
+
+        WriteText(
+            directory,
+            new ResPath($"{RestoreSelectionFileName}.tmp"),
+            epoch.ToString(CultureInfo.InvariantCulture));
+        var selection = new ResPath(RestoreSelectionFileName).ToRootedPath();
+        directory.Delete(selection);
+        directory.Rename(new ResPath($"{RestoreSelectionFileName}.tmp").ToRootedPath(), selection);
+        return true;
+    }
+
+    public bool CancelRestoreRequest()
+    {
+        var directory = GetSnapshotDirectory(create: false);
+        if (directory == null)
+            return false;
+
+        var selection = new ResPath(RestoreSelectionFileName).ToRootedPath();
+        if (!directory.Exists(selection))
+            return false;
+
+        directory.Delete(selection);
+        return true;
+    }
+
+    /// <summary>
+    /// Loads the newest valid committed snapshot and discards every map except its registered primary map.
+    /// Returns false when there is no usable snapshot.
     /// </summary>
     public bool TryLoadSavedWorldMap(
         GameMapPrototype prototype,
@@ -235,7 +347,16 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         if (directory == null)
             return false;
 
-        foreach (var marker in GetCommittedSnapshots(directory))
+        var committed = GetCommittedSnapshots(directory);
+        var requestedRestoreEpoch = GetPendingRestoreEpoch(directory);
+        var snapshots = requestedRestoreEpoch is { } requestedEpoch
+            ? committed.Where(marker => GetEpoch(marker) == requestedEpoch).ToArray()
+            : committed;
+
+        if (requestedRestoreEpoch != null && snapshots.Length == 0)
+            throw new InvalidDataException($"Requested world snapshot {requestedRestoreEpoch} is no longer available.");
+
+        foreach (var marker in snapshots)
         {
             if (_runtimeContentSnapshotEpoch is { } assetEpoch && GetEpoch(marker) > assetEpoch)
                 continue;
@@ -243,15 +364,13 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             var snapshotName = string.Empty;
             var snapshotPath = default(ResPath);
             var isFullWorldSnapshot = false;
-            var restoredPrototype = prototype;
             MapId restoredMapId;
             IReadOnlyList<EntityUid> restoredGrids;
             LoadResult? loadedState = null;
 
             try
             {
-                snapshotName = ReadText(directory, marker).Trim();
-                if (!IsSnapshotFileName(snapshotName))
+                if (!TryGetSnapshotName(directory, marker, out snapshotName))
                 {
                     Log.Error($"Ignoring invalid persistence marker {marker}.");
                     continue;
@@ -278,11 +397,6 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                             continue;
                         }
 
-                        if (!string.IsNullOrWhiteSpace(persistentMap.GameMapPrototype) &&
-                            _prototypeManager.TryIndex<GameMapPrototype>(persistentMap.GameMapPrototype, out var savedPrototype))
-                        {
-                            restoredPrototype = savedPrototype;
-                        }
                     }
                     else if (loadedState.Maps.Count != 1)
                     {
@@ -303,12 +417,14 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                     continue;
                 }
 
-                if (!isFullWorldSnapshot &&
-                    TryComp(mainMap.Value.Owner, out CalamityPersistentMapComponent? legacyPersistentMap) &&
-                    !string.IsNullOrWhiteSpace(legacyPersistentMap.GameMapPrototype) &&
-                    _prototypeManager.TryIndex<GameMapPrototype>(legacyPersistentMap.GameMapPrototype, out var legacyPrototype))
+                if (!TryComp(mainMap.Value.Owner, out CalamityPersistentMapComponent? persistentMainMap) ||
+                    persistentMainMap.Key != MainMapKey ||
+                    persistentMainMap.GameMapPrototype != prototype.ID)
                 {
-                    restoredPrototype = legacyPrototype;
+                    _mapLoader.Delete(loadedState);
+                    loadedState = null;
+                    Log.Info($"Ignoring world snapshot {snapshotPath} because its registered main map is not Colossus ({prototype.ID}).");
+                    continue;
                 }
 
                 restoredMapId = mainMap.Value.Comp.MapId;
@@ -318,6 +434,15 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                         .Select(grid => grid.Owner)
                         .ToArray()
                     : loadedState.Grids.Select(grid => grid.Owner).ToArray();
+
+                if (isFullWorldSnapshot)
+                {
+                    foreach (var candidate in loadedState.Maps)
+                    {
+                        if (candidate.Owner != mainMap.Value.Owner)
+                            _mapSystem.DeleteMap(candidate.Comp.MapId);
+                    }
+                }
             }
             catch (Exception exception)
             {
@@ -328,6 +453,9 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 continue;
             }
 
+            if (requestedRestoreEpoch != null && GetEpoch(marker) != requestedRestoreEpoch)
+                throw new InvalidDataException($"Requested world snapshot {requestedRestoreEpoch} could not be loaded.");
+
             mapId = restoredMapId;
             grids = restoredGrids;
             RestoredSavedWorldMapThisBoot = true;
@@ -335,12 +463,12 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
             try
             {
-                SetWorldMap(mapId, restoredPrototype);
+                SetWorldMap(mapId, prototype);
                 if (_mapSystem.TryGetMap(mapId, out var restoredMapEntity) && restoredMapEntity != null)
-                    _metadata.SetEntityName(restoredMapEntity.Value, restoredPrototype.MapName);
+                    _metadata.SetEntityName(restoredMapEntity.Value, prototype.MapName);
 
                 RestoreLoadedPlayerMindData();
-                RaiseLocalEvent(new PostGameMapLoad(restoredPrototype, mapId, grids, null, restored: true));
+                RaiseLocalEvent(new PostGameMapLoad(prototype, mapId, grids, null, restored: true));
                 Log.Info($"Restored world map from snapshot {snapshotPath}.");
             }
             catch (Exception exception)
@@ -349,8 +477,14 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
                 Log.Error($"World snapshot {snapshotPath} loaded, but post-load initialization failed: {exception}");
             }
 
+            if (requestedRestoreEpoch != null)
+                directory.Delete(new ResPath(RestoreSelectionFileName).ToRootedPath());
+
             return true;
         }
+
+        if (requestedRestoreEpoch != null)
+            throw new InvalidDataException($"Requested world snapshot {requestedRestoreEpoch} does not contain a usable main map.");
 
         return false;
     }
@@ -537,9 +671,10 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             var snapshotName = $"world-{epoch:D8}-universe.yml";
             var markerName = $"world-{epoch:D8}.complete";
             var temporaryMarkerName = $"world-{epoch:D8}.complete.tmp";
-            var snapshotPath = new ResPath($"{SnapshotDirectoryName}/{snapshotName}");
+            var snapshotPath = new ResPath($"/{SnapshotDirectoryName}/{snapshotName}");
+            var snapshotRelativePath = new ResPath(snapshotName).ToRootedPath();
 
-            if (!_mapLoader.TrySaveAllEntities(snapshotPath) || !directory.Exists(snapshotPath))
+            if (!_mapLoader.TrySaveAllEntities(snapshotPath) || !directory.Exists(snapshotRelativePath))
             {
                 Log.Error($"Failed to write server world snapshot {snapshotPath}.");
                 Announce("calamity-world-save-failed");
@@ -560,7 +695,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             SaveRuntimeContent(directory, epoch);
 
             WriteText(directory, new ResPath(temporaryMarkerName), snapshotName);
-            directory.Rename(new ResPath(temporaryMarkerName), new ResPath(markerName));
+            directory.Rename(new ResPath(temporaryMarkerName).ToRootedPath(), new ResPath(markerName).ToRootedPath());
 
             try
             {
@@ -606,7 +741,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     private IWritableDirProvider? GetSnapshotDirectory(bool create)
     {
-        var path = new ResPath(SnapshotDirectoryName);
+        var path = new ResPath(SnapshotDirectoryName).ToRootedPath();
         if (create)
             _resources.UserData.CreateDir(path);
 
@@ -621,6 +756,41 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         return directory.Find("world-*.complete", recursive: false).files
             .OrderByDescending(GetEpoch)
             .ToArray();
+    }
+
+    private static int? GetPendingRestoreEpoch(IWritableDirProvider directory)
+    {
+        var selection = new ResPath(RestoreSelectionFileName).ToRootedPath();
+        if (!directory.Exists(selection))
+            return null;
+
+        var value = ReadText(directory, selection).Trim();
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var epoch) || epoch <= 0)
+            throw new InvalidDataException($"The pending world restore selection '{value}' is invalid.");
+
+        return epoch;
+    }
+
+    private bool TryGetSnapshotName(IWritableDirProvider directory, ResPath marker, out string snapshotName)
+    {
+        snapshotName = string.Empty;
+        try
+        {
+            snapshotName = ReadText(directory, marker).Trim();
+            var epoch = GetEpoch(marker);
+            var epochPrefix = $"world-{epoch:D8}";
+            return epoch > 0 &&
+                   IsSnapshotFileName(snapshotName) &&
+                   snapshotName.StartsWith(epochPrefix, StringComparison.Ordinal) &&
+                   snapshotName.Length > epochPrefix.Length &&
+                   snapshotName[epochPrefix.Length] is '-' or '.' &&
+                   directory.Exists(new ResPath(snapshotName).ToRootedPath());
+        }
+        catch (Exception exception)
+        {
+            Log.Error($"Could not read committed world snapshot marker {marker}: {exception}");
+            return false;
+        }
     }
 
     private static int GetEpoch(ResPath marker)
@@ -642,28 +812,47 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     private static string ReadText(IWritableDirProvider directory, ResPath path)
     {
-        using var stream = directory.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var stream = directory.Open(path.ToRootedPath(), FileMode.Open, FileAccess.Read, FileShare.Read);
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
 
     private static void WriteText(IWritableDirProvider directory, ResPath path, string content)
     {
-        using var stream = directory.Open(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var stream = directory.Open(path.ToRootedPath(), FileMode.Create, FileAccess.Write, FileShare.None);
         using var writer = new StreamWriter(stream);
         writer.Write(content);
         writer.Flush();
         stream.Flush();
     }
 
+    private static byte[] ReadBytes(IWritableDirProvider directory, ResPath path)
+    {
+        using var stream = directory.Open(path.ToRootedPath(), FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    }
+
+    private static void WriteBytes(IWritableDirProvider directory, ResPath path, byte[] data)
+    {
+        using var stream = directory.Open(path.ToRootedPath(), FileMode.Create, FileAccess.Write, FileShare.None);
+        stream.Write(data);
+        stream.Flush();
+    }
+
     private static void PruneSnapshots(IWritableDirProvider directory)
     {
         var committed = GetCommittedSnapshots(directory);
+        var pendingRestoreEpoch = GetPendingRestoreEpoch(directory);
         foreach (var marker in committed.Skip(RetainedSnapshots))
         {
+            if (pendingRestoreEpoch == GetEpoch(marker))
+                continue;
+
             var snapshotName = ReadText(directory, marker).Trim();
             if (IsSnapshotFileName(snapshotName))
-                directory.Delete(new ResPath(snapshotName));
+                directory.Delete(new ResPath(snapshotName).ToRootedPath());
 
             var assetPath = GetSnapshotAssetDirectoryPath(GetEpoch(marker));
             if (directory.Exists(assetPath))
@@ -680,7 +869,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         directory.CreateDir(assetPath);
         var assetDirectory = directory.OpenSubdirectory(assetPath);
 
-        var resourcePath = new ResPath(SnapshotResourceDirectoryName);
+        var resourcePath = new ResPath(SnapshotResourceDirectoryName).ToRootedPath();
         assetDirectory.CreateDir(resourcePath);
         var resourceDirectory = assetDirectory.OpenSubdirectory(resourcePath);
         var uploadedFiles = _networkResourceManager.GetFilesForPersistence();
@@ -690,7 +879,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             ValidateRuntimeResourcePath(relative.CanonPath);
 
             using var stream = resourceDirectory.Open(
-                new ResPath($"resource-{index:D8}.bin"),
+                new ResPath($"resource-{index:D8}.bin").ToRootedPath(),
                 FileMode.Create,
                 FileAccess.Write,
                 FileShare.None);
@@ -702,7 +891,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             stream.Flush();
         }
 
-        var prototypePath = new ResPath(SnapshotPrototypeDirectoryName);
+        var prototypePath = new ResPath(SnapshotPrototypeDirectoryName).ToRootedPath();
         assetDirectory.CreateDir(prototypePath);
         var prototypeDirectory = assetDirectory.OpenSubdirectory(prototypePath);
         var prototypes = _prototypeLoadManager.GetPrototypesForPersistence();
@@ -711,21 +900,29 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             WriteText(prototypeDirectory, new ResPath($"prototype-{index:D8}.yml"), prototypes[index]);
         }
 
+        var databaseState = _database.CaptureCalamityRollbackStateAsync().GetAwaiter().GetResult();
+        WriteBytes(assetDirectory, new ResPath(SnapshotDatabaseStateName), databaseState);
         WriteText(assetDirectory, new ResPath(SnapshotAssetManifestName), SnapshotAssetManifestVersion);
     }
 
-    private void RestoreRuntimeContent(IWritableDirProvider directory, int epoch)
+    private void RestoreRuntimeContent(IWritableDirProvider directory, int epoch, bool requireDatabaseRollback)
     {
         var assetPath = GetSnapshotAssetDirectoryPath(epoch);
         var assetDirectory = directory.OpenSubdirectory(assetPath);
-        var manifestPath = new ResPath(SnapshotAssetManifestName);
-        if (!assetDirectory.Exists(manifestPath) ||
-            ReadText(assetDirectory, manifestPath).Trim() != SnapshotAssetManifestVersion)
+        var manifestPath = new ResPath(SnapshotAssetManifestName).ToRootedPath();
+        if (!assetDirectory.Exists(manifestPath))
         {
             throw new InvalidDataException($"Snapshot assets for epoch {epoch} have no supported completion manifest.");
         }
 
-        var resourceDirectory = assetDirectory.OpenSubdirectory(new ResPath(SnapshotResourceDirectoryName));
+        var manifest = ReadText(assetDirectory, manifestPath).Trim();
+        if (manifest != SnapshotAssetManifestVersion && manifest != PreviousSnapshotAssetManifestVersion)
+            throw new InvalidDataException($"Snapshot assets for epoch {epoch} have unsupported manifest '{manifest}'.");
+
+        if (requireDatabaseRollback && manifest != SnapshotAssetManifestVersion)
+            throw new InvalidDataException($"World snapshot {epoch} predates database rollback data and cannot be restored completely.");
+
+        var resourceDirectory = assetDirectory.OpenSubdirectory(new ResPath(SnapshotResourceDirectoryName).ToRootedPath());
         var uploadedFiles = new List<(ResPath Relative, byte[] Data)>();
         foreach (var file in resourceDirectory.Find("resource-*.bin", recursive: false).files
                      .OrderBy(path => path.ToString(), StringComparer.Ordinal))
@@ -744,7 +941,7 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
             uploadedFiles.Add((path, data));
         }
 
-        var prototypeDirectory = assetDirectory.OpenSubdirectory(new ResPath(SnapshotPrototypeDirectoryName));
+        var prototypeDirectory = assetDirectory.OpenSubdirectory(new ResPath(SnapshotPrototypeDirectoryName).ToRootedPath());
         var prototypes = prototypeDirectory.Find("prototype-*.yml", recursive: false).files
             .OrderBy(path => path.ToString(), StringComparer.Ordinal)
             .Select(path => ReadText(prototypeDirectory, path))
@@ -754,6 +951,20 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
         // resources first and prototypes second, before any restored map entities are replicated.
         _networkResourceManager.RestorePersistentFiles(uploadedFiles);
         _prototypeLoadManager.RestorePersistentPrototypes(prototypes);
+
+        if (manifest == SnapshotAssetManifestVersion)
+        {
+            var databaseStatePath = new ResPath(SnapshotDatabaseStateName).ToRootedPath();
+            if (!assetDirectory.Exists(databaseStatePath))
+                throw new InvalidDataException($"Snapshot assets for epoch {epoch} have no database rollback state.");
+
+            var databaseState = ReadBytes(assetDirectory, databaseStatePath);
+            _database.RestoreCalamityRollbackStateAsync(databaseState).GetAwaiter().GetResult();
+        }
+        else
+        {
+            Log.Warning($"World snapshot {epoch} predates database rollback data; restoring it will not roll back database-backed gameplay state.");
+        }
     }
 
     private static ResPath ValidateRuntimeResourcePath(string path)
@@ -773,6 +984,6 @@ public sealed class CalamityWorldPersistenceSystem : EntitySystem
 
     private static ResPath GetSnapshotAssetDirectoryPath(int epoch)
     {
-        return new ResPath($"world-{epoch:D8}{SnapshotAssetDirectorySuffix}");
+        return new ResPath($"world-{epoch:D8}{SnapshotAssetDirectorySuffix}").ToRootedPath();
     }
 }

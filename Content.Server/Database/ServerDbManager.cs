@@ -55,6 +55,8 @@ namespace Content.Server.Database
         Task<long> GetMonoCoinsAsync(NetUserId userId, CancellationToken cancel = default);
         Task SetMonoCoinsAsync(NetUserId userId, long balance, CancellationToken cancel = default);
         Task<long> AddMonoCoinsAsync(NetUserId userId, long amount, CancellationToken cancel = default);
+        Task<byte[]> CaptureCalamityRollbackStateAsync(CancellationToken cancel = default);
+        Task RestoreCalamityRollbackStateAsync(byte[] data, CancellationToken cancel = default);
         #endregion
 
         #region User Ids
@@ -554,6 +556,18 @@ namespace Content.Server.Database
         {
             DbWriteOpsMetric.Inc();
             return RunDbCommand(() => _db.AddMonoCoinsAsync(userId, amount, cancel));
+        }
+
+        public Task<byte[]> CaptureCalamityRollbackStateAsync(CancellationToken cancel = default)
+        {
+            DbReadOpsMetric.Inc();
+            return RunDbCommand(() => _db.CaptureCalamityRollbackStateAsync(cancel));
+        }
+
+        public Task RestoreCalamityRollbackStateAsync(byte[] data, CancellationToken cancel = default)
+        {
+            DbWriteOpsMetric.Inc();
+            return RunDbCommand(() => _db.RestoreCalamityRollbackStateAsync(data, cancel));
         }
 
         public Task AssignUserIdAsync(string name, NetUserId userId)

@@ -1,0 +1,27 @@
+<controls:FancyWindow xmlns="https://spacestation14.io"
+                      xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"
+                      Title="{Loc 'calamity-personal-ship-console-title'}"
+                      SetSize="620 500"
+                      MinSize="560 420">
+    <BoxContainer Orientation="Vertical" Margin="8">
+        <Label Name="CharacterLabel" StyleClasses="LabelKeyText"/>
+        <Label Name="IdLabel" StyleClasses="LabelKeyText"/>
+        <PanelContainer VerticalExpand="True">
+            <ScrollContainer VerticalExpand="True" HScrollEnabled="False">
+                <BoxContainer Name="ShipDetails" Orientation="Vertical" Margin="6"/>
+            </ScrollContainer>
+        </PanelContainer>
+        <Label Name="StoreStatus" Visible="False" FontColorOverride="#ff6b6b"/>
+        <BoxContainer Orientation="Horizontal" HorizontalExpand="True">
+            <Button Name="StoreButton" Text="{Loc 'calamity-personal-ship-console-store'}" HorizontalExpand="True"/>
+            <Button Name="RetrieveButton" Text="{Loc 'calamity-personal-ship-console-retrieve'}" HorizontalExpand="True"/>
+            <Button Name="UnlinkButton" Text="{Loc 'calamity-personal-ship-console-unlink'}" HorizontalExpand="True"/>
+        </BoxContainer>
+        <Label Name="LinkableLabel" Text="{Loc 'calamity-personal-ship-console-linkable'}"/>
+        <ScrollContainer VerticalExpand="True" HScrollEnabled="False" MinSize="0 100">
+            <BoxContainer Name="DockedShips" Orientation="Vertical"/>
+        </ScrollContainer>
+        <Button Name="LinkButton" Text="{Loc 'calamity-personal-ship-console-link-selected'}" Disabled="True"/>
+        <Button Name="RefreshButton" Text="{Loc 'calamity-personal-ship-console-refresh'}"/>
+    </BoxContainer>
+</controls:FancyWindow>

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -474,6 +475,326 @@ namespace Content.Server.Database
         }
 
         #endregion
+
+        public async Task<byte[]> CaptureCalamityRollbackStateAsync(CancellationToken cancel = default)
+        {
+            await using var db = await GetDb(cancel);
+            var context = db.DbContext;
+            var preferences = await context.Preference
+                .Include(preference => preference.Profiles).ThenInclude(profile => profile.Jobs)
+                .Include(preference => preference.Profiles).ThenInclude(profile => profile.Antags)
+                .Include(preference => preference.Profiles).ThenInclude(profile => profile.Traits)
+                .Include(preference => preference.Profiles).ThenInclude(profile => profile.Components)
+                .Include(preference => preference.Profiles).ThenInclude(profile => profile.Items)
+                .Include(preference => preference.Profiles)
+                    .ThenInclude(profile => profile.Loadouts)
+                    .ThenInclude(loadout => loadout.Groups)
+                    .ThenInclude(group => group.Loadouts)
+                .AsSplitQuery()
+                .ToArrayAsync(cancel);
+
+            var companyMembers = await context.CompanyMembers.ToArrayAsync(cancel);
+            var boxes = await context.WayfarerSafetyDepositBox
+                .Include(box => box.Items)
+                .ToArrayAsync(cancel);
+
+            var state = new CalamityRollbackState
+            {
+                Preferences = preferences.Select(preference => new CalamityPreferenceState
+                {
+                    Id = preference.Id,
+                    UserId = preference.UserId,
+                    SelectedCharacterSlot = preference.SelectedCharacterSlot,
+                    AdminOOCColor = preference.AdminOOCColor,
+                    MonoCoins = preference.MonoCoins,
+                    Profiles = preference.Profiles.Select(profile => new CalamityProfileState
+                    {
+                        Id = profile.Id,
+                        Slot = profile.Slot,
+                        CharacterName = profile.CharacterName,
+                        FlavorText = profile.FlavorText,
+                        Age = profile.Age,
+                        BankBalance = profile.BankBalance,
+                        Sex = profile.Sex,
+                        Gender = profile.Gender,
+                        Species = profile.Species,
+                        Markings = profile.Markings?.RootElement.GetRawText(),
+                        HairName = profile.HairName,
+                        HairColor = profile.HairColor,
+                        FacialHairName = profile.FacialHairName,
+                        FacialHairColor = profile.FacialHairColor,
+                        EyeColor = profile.EyeColor,
+                        SkinColor = profile.SkinColor,
+                        Height = profile.Height,
+                        Width = profile.Width,
+                        SpawnPriority = profile.SpawnPriority,
+                        PreferenceUnavailable = (int) profile.PreferenceUnavailable,
+                        Company = profile.Company,
+                        Flags = profile.Flags,
+                        Components = profile.Components.Select(component => new CalamityProfileComponentState
+                        {
+                            Data = component.Data,
+                            Sticky = component.Sticky,
+                        }).ToList(),
+                        Items = profile.Items.Select(item => new CalamityProfileItemState
+                        {
+                            Data = item.Data,
+                            Sticky = item.Sticky,
+                        }).ToList(),
+                        Jobs = profile.Jobs.Select(job => new CalamityJobState
+                        {
+                            Name = job.JobName,
+                            Priority = (int) job.Priority,
+                        }).ToList(),
+                        Antags = profile.Antags.Select(antag => antag.AntagName).ToList(),
+                        Traits = profile.Traits.Select(trait => trait.TraitName).ToList(),
+                        Loadouts = profile.Loadouts.Select(loadout => new CalamityRoleLoadoutState
+                        {
+                            RoleName = loadout.RoleName,
+                            EntityName = loadout.EntityName,
+                            Groups = loadout.Groups.Select(group => new CalamityLoadoutGroupState
+                            {
+                                GroupName = group.GroupName,
+                                Loadouts = group.Loadouts.Select(selected => selected.LoadoutName).ToList(),
+                            }).ToList(),
+                        }).ToList(),
+                    }).ToList(),
+                }).ToList(),
+                CompanyMembers = companyMembers.Select(member => new CalamityCompanyMemberState
+                {
+                    PlayerUserId = member.PlayerUserId,
+                    Owner = member.Owner,
+                    CompanyId = member.CompanyId,
+                }).ToList(),
+                SafetyDepositBoxes = boxes.Select(box => new CalamitySafetyDepositBoxState
+                {
+                    BoxId = box.BoxId,
+                    OwnerUserId = box.OwnerUserId,
+                    CharacterIndex = box.CharacterIndex,
+                    OwnerName = box.OwnerName,
+                    Nickname = box.Nickname,
+                    ProtoId = box.ProtoId,
+                    PurchaseDate = box.PurchaseDate,
+                    LastWithdrawn = box.LastWithdrawn,
+                    LastWithdrawnRoundId = box.LastWithdrawnRoundId,
+                    Items = box.Items.Select(item => new CalamitySafetyDepositBoxItemState
+                    {
+                        EntityData = item.EntityData,
+                        DepositDate = item.DepositDate,
+                    }).ToList(),
+                }).ToList(),
+            };
+
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(state);
+        }
+
+        public async Task RestoreCalamityRollbackStateAsync(byte[] data, CancellationToken cancel = default)
+        {
+            var state = System.Text.Json.JsonSerializer.Deserialize<CalamityRollbackState>(data)
+                        ?? throw new InvalidDataException("The Calamity rollback state is empty or invalid.");
+            if (state.Version != 1)
+                throw new InvalidDataException($"Unsupported Calamity rollback state version {state.Version}.");
+
+            await using var db = await GetDb(cancel);
+            var context = db.DbContext;
+            await using var transaction = await context.Database.BeginTransactionAsync(cancel);
+
+            await context.WayfarerSafetyDepositBoxItem.ExecuteDeleteAsync(cancel);
+            await context.WayfarerSafetyDepositBox.ExecuteDeleteAsync(cancel);
+            await context.CompanyMembers.ExecuteDeleteAsync(cancel);
+            await context.Set<ProfileLoadout>().ExecuteDeleteAsync(cancel);
+            await context.Set<ProfileLoadoutGroup>().ExecuteDeleteAsync(cancel);
+            await context.Set<ProfileRoleLoadout>().ExecuteDeleteAsync(cancel);
+            await context.Set<Job>().ExecuteDeleteAsync(cancel);
+            await context.Set<Antag>().ExecuteDeleteAsync(cancel);
+            await context.Set<Trait>().ExecuteDeleteAsync(cancel);
+            await context.Set<ProfileComponent>().ExecuteDeleteAsync(cancel);
+            await context.Set<ProfileItem>().ExecuteDeleteAsync(cancel);
+            await context.Profile.ExecuteDeleteAsync(cancel);
+            await context.Preference.ExecuteDeleteAsync(cancel);
+
+            var preferences = state.Preferences.Select(preference =>
+            {
+                var entity = new Preference
+                {
+                    Id = preference.Id,
+                    UserId = preference.UserId,
+                    SelectedCharacterSlot = preference.SelectedCharacterSlot,
+                    AdminOOCColor = preference.AdminOOCColor,
+                    MonoCoins = preference.MonoCoins,
+                };
+
+                foreach (var profileState in preference.Profiles)
+                {
+                    var profile = new Profile
+                    {
+                        Id = profileState.Id,
+                        Slot = profileState.Slot,
+                        CharacterName = profileState.CharacterName,
+                        FlavorText = profileState.FlavorText,
+                        Age = profileState.Age,
+                        BankBalance = profileState.BankBalance,
+                        Sex = profileState.Sex,
+                        Gender = profileState.Gender,
+                        Species = profileState.Species,
+                        Markings = profileState.Markings == null ? null : System.Text.Json.JsonDocument.Parse(profileState.Markings),
+                        HairName = profileState.HairName,
+                        HairColor = profileState.HairColor,
+                        FacialHairName = profileState.FacialHairName,
+                        FacialHairColor = profileState.FacialHairColor,
+                        EyeColor = profileState.EyeColor,
+                        SkinColor = profileState.SkinColor,
+                        Height = profileState.Height,
+                        Width = profileState.Width,
+                        SpawnPriority = profileState.SpawnPriority,
+                        PreferenceUnavailable = (DbPreferenceUnavailableMode) profileState.PreferenceUnavailable,
+                        Company = profileState.Company,
+                        Flags = profileState.Flags,
+                        PreferenceId = preference.Id,
+                        Preference = entity,
+                    };
+                    entity.Profiles.Add(profile);
+
+                    foreach (var component in profileState.Components)
+                    {
+                        profile.Components.Add(new ProfileComponent
+                        {
+                            ProfileId = profile.Id,
+                            Profile = profile,
+                            Data = component.Data,
+                            Sticky = component.Sticky,
+                        });
+                    }
+
+                    foreach (var item in profileState.Items)
+                    {
+                        profile.Items.Add(new ProfileItem
+                        {
+                            ProfileId = profile.Id,
+                            Profile = profile,
+                            Data = item.Data,
+                            Sticky = item.Sticky,
+                        });
+                    }
+
+                    foreach (var job in profileState.Jobs)
+                    {
+                        profile.Jobs.Add(new Job
+                        {
+                            ProfileId = profile.Id,
+                            Profile = profile,
+                            JobName = job.Name,
+                            Priority = (DbJobPriority) job.Priority,
+                        });
+                    }
+
+                    foreach (var antag in profileState.Antags)
+                    {
+                        profile.Antags.Add(new Antag
+                        {
+                            ProfileId = profile.Id,
+                            Profile = profile,
+                            AntagName = antag,
+                        });
+                    }
+
+                    foreach (var trait in profileState.Traits)
+                    {
+                        profile.Traits.Add(new Trait
+                        {
+                            ProfileId = profile.Id,
+                            Profile = profile,
+                            TraitName = trait,
+                        });
+                    }
+
+                    foreach (var loadoutState in profileState.Loadouts)
+                    {
+                        var loadout = new ProfileRoleLoadout
+                        {
+                            ProfileId = profile.Id,
+                            Profile = profile,
+                            RoleName = loadoutState.RoleName,
+                            EntityName = loadoutState.EntityName,
+                        };
+
+                        foreach (var groupState in loadoutState.Groups)
+                        {
+                            var group = new ProfileLoadoutGroup
+                            {
+                                ProfileRoleLoadout = loadout,
+                                GroupName = groupState.GroupName,
+                            };
+
+                            foreach (var selectedLoadout in groupState.Loadouts)
+                            {
+                                group.Loadouts.Add(new ProfileLoadout
+                                {
+                                    ProfileLoadoutGroup = group,
+                                    LoadoutName = selectedLoadout,
+                                });
+                            }
+
+                            loadout.Groups.Add(group);
+                        }
+
+                        profile.Loadouts.Add(loadout);
+                    }
+                }
+
+                return entity;
+            }).ToArray();
+
+            context.Preference.AddRange(preferences);
+            context.CompanyMembers.AddRange(state.CompanyMembers.Select(member => new CompanyMember
+            {
+                PlayerUserId = member.PlayerUserId,
+                Owner = member.Owner,
+                CompanyId = member.CompanyId,
+            }));
+
+            foreach (var boxState in state.SafetyDepositBoxes)
+            {
+                var box = new WayfarerSafetyDepositBox
+                {
+                    BoxId = boxState.BoxId,
+                    OwnerUserId = boxState.OwnerUserId,
+                    CharacterIndex = boxState.CharacterIndex,
+                    OwnerName = boxState.OwnerName,
+                    Nickname = boxState.Nickname,
+                    ProtoId = boxState.ProtoId,
+                    PurchaseDate = boxState.PurchaseDate,
+                    LastWithdrawn = boxState.LastWithdrawn,
+                    LastWithdrawnRoundId = boxState.LastWithdrawnRoundId,
+                };
+
+                foreach (var itemState in boxState.Items)
+                {
+                    box.Items.Add(new WayfarerSafetyDepositBoxItem
+                    {
+                        Box = box,
+                        EntityData = itemState.EntityData,
+                        DepositDate = itemState.DepositDate,
+                    });
+                }
+
+                context.WayfarerSafetyDepositBox.Add(box);
+            }
+
+            await context.SaveChangesAsync(cancel);
+
+            if (context.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL")
+            {
+                await context.Database.ExecuteSqlRawAsync(
+                    "SELECT setval(pg_get_serial_sequence('preference', 'id'), COALESCE(MAX(id), 1), COUNT(*) > 0) FROM preference",
+                    cancel);
+                await context.Database.ExecuteSqlRawAsync(
+                    "SELECT setval(pg_get_serial_sequence('profile', 'id'), COALESCE(MAX(id), 1), COUNT(*) > 0) FROM profile",
+                    cancel);
+            }
+
+            await transaction.CommitAsync(cancel);
+        }
 
         #region Bans
         /*

@@ -3,8 +3,10 @@
 
 using Content.Server._Mono.Ships.Systems;
 using Content.Server.Administration.Logs;
+using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
 using Content.Shared._Mono.FireControl;
+using Content.Shared._Calamity.Ships;
 using Content.Shared._Mono.Ships.Components;
 using Content.Shared.Database;
 using Content.Shared.GameTicking;
@@ -46,6 +48,7 @@ public sealed partial class FireControlSystem : EntitySystem
         SubscribeLocalEvent<FireControlConsoleComponent, ComponentShutdown>(OnComponentShutdown);
         SubscribeLocalEvent<FireControlConsoleComponent, FireControlConsoleRefreshServerMessage>(OnRefreshServer);
         SubscribeLocalEvent<FireControlConsoleComponent, FireControlConsoleFireMessage>(OnFire);
+        SubscribeLocalEvent<FireControlConsoleComponent, FireControlConsoleStateRequestEvent>(OnGetShuttleFireControlState);
         SubscribeLocalEvent<FireControlConsoleComponent, BoundUIOpenedEvent>(OnUIOpened);
         SubscribeLocalEvent<FireControlConsoleComponent, ActivatableUIOpenAttemptEvent>(OnConsoleUIOpenAttempt);
     }
@@ -169,6 +172,16 @@ public sealed partial class FireControlSystem : EntitySystem
         RaiseLocalEvent(uid, fireEvent);
     }
 
+    private void OnGetShuttleFireControlState(
+        EntityUid uid,
+        FireControlConsoleComponent component,
+        ref FireControlConsoleStateRequestEvent args)
+    {
+        var (connected, controllables) = GetFireControlData(uid, component);
+        args.Connected = connected;
+        args.Controllables = controllables;
+    }
+
     public void OnUIOpened(EntityUid uid, FireControlConsoleComponent component, BoundUIOpenedEvent args)
     {
         UpdateUi(uid, component);
@@ -258,12 +271,27 @@ public sealed partial class FireControlSystem : EntitySystem
             return;
 
         NavInterfaceState navState = _shuttleConsoleSystem.GetNavState(uid, _shuttleConsoleSystem.GetAllDocks());
+        var (connected, controllables) = GetFireControlData(uid, component);
+        var state = new FireControlConsoleBoundInterfaceState(connected, controllables, navState);
+        if (_ui.HasUi(uid, FireControlConsoleUiKey.Key))
+            _ui.SetUiState(uid, FireControlConsoleUiKey.Key, state);
 
+        if (HasComp<ShuttleConsoleComponent>(uid) &&
+            Transform(uid).GridUid is { } grid)
+        {
+            _shuttleConsoleSystem.RefreshShuttleConsoles(grid);
+        }
+    }
+
+    private (bool Connected, FireControllableEntry[] Controllables) GetFireControlData(
+        EntityUid uid,
+        FireControlConsoleComponent component)
+    {
         List<FireControllableEntry> controllables = new();
         if (component.ConnectedServer != null && TryComp<FireControlServerComponent>(component.ConnectedServer, out var server))
         {
             if (!server.Consoles.Contains(uid))
-                return;
+                return (false, []);
 
             foreach (var controllable in server.Controlled)
             {
@@ -282,10 +310,7 @@ public sealed partial class FireControlSystem : EntitySystem
             }
         }
 
-        var array = controllables.ToArray();
-
-        var state = new FireControlConsoleBoundInterfaceState(component.ConnectedServer != null, array, navState);
-        _ui.SetUiState(uid, FireControlConsoleUiKey.Key, state);
+        return (component.ConnectedServer != null, controllables.ToArray());
     }
 
     /// <summary>

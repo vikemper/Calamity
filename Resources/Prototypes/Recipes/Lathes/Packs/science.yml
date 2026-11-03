@@ -9,6 +9,8 @@
   - ExosuitFabricatorMachineCircuitboard
   - CutterMachineCircuitboard
   - BorgChargerCircuitboard
+  - CalamityPersonalShipCircuitboard
+  - CalamityPersonalShipNavigationCircuitboard
 
 - type: latheRecipePack
   id: CircuitFloorsStatic

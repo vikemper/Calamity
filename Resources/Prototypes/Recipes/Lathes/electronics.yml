@@ -85,6 +85,16 @@
   result: MailingUnitElectronics
 
 - type: latheRecipe
+  parent: BaseCircuitboardRecipe
+  id: CalamityPersonalShipCircuitboard
+  result: CalamityPersonalShipCircuitboard
+
+- type: latheRecipe
+  parent: BaseCircuitboardRecipe
+  id: CalamityPersonalShipNavigationCircuitboard
+  result: CalamityPersonalShipNavigationCircuitboard
+
+- type: latheRecipe
   parent: BaseCheapElectronicsRecipe
   id: CellRechargerCircuitboard
   result: CellRechargerCircuitboard

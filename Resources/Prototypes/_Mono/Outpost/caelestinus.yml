@@ -1,7 +1,7 @@
 - type: gameMap
   id: Frontier
-  mapName: 'Caelestinus Central'
-  mapPath: /Maps/_Mono/Outpost/caelestinus_central.yml # Mono
+  mapName: 'Colossus Central'
+  mapPath: /Maps/_Mono/Outpost/colossus_central.yml # Mono
   minPlayers: 0
   maxPlayers: 100
   randomRotation: true
@@ -25,7 +25,7 @@
         distance: 4000
       components:
         - type: StationNameSetup
-          mapNameTemplate: 'Caelestinus Central'
+          mapNameTemplate: 'Colossus Central'
         - type: StationDeadDrop
           maxDeadDrops: 2
         - type: ExtraStationInformation

@@ -29,6 +29,7 @@ using Content.Server.Radio.EntitySystems;
 using Content.Server.Station.Components;
 using Content.Shared._Mono.FireControl;
 using Content.Shared._Mono.Ships.Components;
+using Content.Shared._Calamity.Ships;
 using Content.Shared.Verbs;
 using Robust.Shared.Prototypes;
 
@@ -421,7 +422,18 @@ public sealed partial class ShuttleConsoleSystem : SharedShuttleConsoleSystem
 
         if (_ui.HasUi(consoleUid, ShuttleConsoleUiKey.Key))
         {
-            _ui.SetUiState(consoleUid, ShuttleConsoleUiKey.Key, new ShuttleBoundUserInterfaceState(navState, mapState, dockState));
+            var fireControlState = new FireControlConsoleStateRequestEvent();
+            var fireControlConsole = HasComp<FireControlConsoleComponent>(consoleUid);
+            if (fireControlConsole)
+                RaiseLocalEvent(consoleUid, ref fireControlState);
+
+            _ui.SetUiState(consoleUid, ShuttleConsoleUiKey.Key, new ShuttleBoundUserInterfaceState(
+                navState,
+                mapState,
+                dockState,
+                fireControlConsole,
+                fireControlState.Connected,
+                fireControlState.Controllables));
         }
     }
 

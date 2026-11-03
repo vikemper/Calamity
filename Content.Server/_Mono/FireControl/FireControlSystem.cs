@@ -13,6 +13,7 @@ using Content.Shared.Physics;
 using System.Numerics;
 using Content.Server._Mono.SpaceArtillery;
 using Content.Server._Mono.SpaceArtillery.Components;
+using Content.Server._Calamity.Persistence;
 using Content.Server.Power.EntitySystems;
 using Content.Shared.Shuttles.Components;
 using Robust.Shared.Timing;
@@ -394,6 +395,9 @@ public sealed partial class FireControlSystem : EntitySystem
             return false;
 
         var gridXform = Transform(grid);
+        if (gridXform.MapUid is { } mapUid && HasComp<CalamitySafeSectorComponent>(mapUid))
+            return false;
+
         // Check if the weapon is an expedition
         if (gridXform.MapUid != null && HasComp<SalvageExpeditionComponent>(gridXform.MapUid.Value))
             return false;

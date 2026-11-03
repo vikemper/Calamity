@@ -252,3 +252,21 @@
   components:
   - type: Flatpack
     entity: ComputerCrewMonitoring
+
+- type: entity
+  parent: BaseFlatpack
+  id: CalamityPersonalShipTerminalFlatpack
+  name: flatpack do console de hangar pessoal
+  description: Flatpack usado para construir um console de hangar pessoal.
+  components:
+  - type: Flatpack
+    entity: CalamityPersonalShipTerminal
+
+- type: entity
+  parent: BaseFlatpack
+  id: CalamityPersonalShipNavigationConsoleFlatpack
+  name: flatpack do console de navegação pessoal
+  description: Flatpack usado para construir um console de navegação pessoal.
+  components:
+  - type: Flatpack
+    entity: CalamityPersonalShipNavigationConsole

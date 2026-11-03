@@ -470,6 +470,28 @@
 
 - type: entity
   parent: BaseComputerCircuitboard
+  id: CalamityPersonalShipCircuitboard
+  name: placa de circuito do console de hangar pessoal
+  description: Placa de circuito para construir um console de hangar pessoal.
+  components:
+  - type: Sprite
+    state: cpu_supply
+  - type: ComputerBoard
+    prototype: CalamityPersonalShipTerminal
+
+- type: entity
+  parent: BaseComputerCircuitboard
+  id: CalamityPersonalShipNavigationCircuitboard
+  name: placa de circuito do console de navegação pessoal
+  description: Placa de circuito para construir um console de navegação pessoal.
+  components:
+  - type: Sprite
+    state: cpu_supply
+  - type: ComputerBoard
+    prototype: CalamityPersonalShipNavigationConsole
+
+- type: entity
+  parent: BaseComputerCircuitboard
   id: CloningConsoleComputerCircuitboard
   name: cloning console computer board
   description: A computer printed circuit board for a cloning console.

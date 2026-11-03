@@ -1,0 +1,58 @@
+- type: entity
+  parent: BaseComputerShuttle
+  id: CalamityPersonalShipNavigationConsole
+  name: console de navegação pessoal
+  description: Console para pilotar uma nave pessoal, navegar entre setores e controlar suas armas.
+  components:
+  - type: Sprite
+    layers:
+    - map: ["computerLayerBody"]
+      state: computer
+    - map: ["computerLayerKeyboard"]
+      state: generic_keyboard
+    - map: ["computerLayerScreen"]
+      state: shuttle
+    - map: ["computerLayerKeys"]
+      state: generic_keys
+    - map: ["enum.WiresVisualLayers.MaintenancePanel"]
+      state: generic_panel_open
+  - type: Computer
+    board: CalamityPersonalShipNavigationCircuitboard
+  - type: ItemSlots
+    slots:
+      disk_slot:
+        name: Disk
+        insertSound:
+          path: /Audio/Machines/terminal_insert_disc.ogg
+        ejectSound:
+          path: /Audio/Machines/terminal_insert_disc.ogg
+        whitelist:
+          components:
+          - ShuttleDestinationCoordinates
+      calamity-personal-id:
+        name: calamity-personal-ship-id-slot-name
+        insertSound:
+          path: /Audio/Machines/id_insert.ogg
+        ejectSound:
+          path: /Audio/Machines/id_swipe.ogg
+        whitelist:
+          components:
+          - IdCard
+        swap: false
+  - type: ContainerContainer
+    containers:
+      board: !type:Container
+        ents: []
+      disk_slot: !type:ContainerSlot {}
+      calamity-personal-id: !type:ContainerSlot {}
+  - type: CalamitySectorNavigation
+  - type: CalamityShipNavigationConsole
+    disabled: true
+    primary: false
+  - type: FireControlConsole
+  - type: UserInterface
+    interfaces:
+      enum.ShuttleConsoleUiKey.Key:
+        type: ShuttleConsoleBoundUserInterface
+      enum.WiresUiKey.Key:
+        type: WiresBoundUserInterface
